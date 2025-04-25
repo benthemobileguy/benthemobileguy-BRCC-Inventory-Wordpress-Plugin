@@ -1,0 +1,131 @@
+/**
+ * BRCC Date Mappings CSS - Improved Layout
+ */
+
+/* Fix for Eventbrite Ticket ID column and button layout */
+.brcc-mapping-input-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    margin: 5px 0;
+}
+
+.brcc-mapping-input-group input {
+    flex: 1;
+    min-width: 150px;
+}
+
+.brcc-mapping-input-group button {
+    flex-shrink: 0;
+    padding: 4px 12px;
+    height: 32px;
+    white-space: nowrap;
+    margin: 0;
+}
+
+/* Consistent button styles */
+.button.brcc-suggest-date-eventbrite-id,
+.button.brcc-find-exact-id {
+    font-size: 13px;
+    line-height: 1.5;
+    min-height: 32px;
+    min-width: 80px;
+    text-align: center;
+}
+
+/* Table layout improvements */
+#brcc-dates-table {
+    table-layout: fixed; 
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+}
+
+/* Adjust column widths for better proportions */
+#brcc-dates-table th:nth-child(1), 
+#brcc-dates-table td:nth-child(1) { 
+    width: 15%; 
+}
+
+#brcc-dates-table th:nth-child(2), 
+#brcc-dates-table td:nth-child(2) { 
+    width: 12%;
+}
+
+#brcc-dates-table th:nth-child(3), 
+#brcc-dates-table td:nth-child(3) { 
+    width: 8%; 
+}
+
+#brcc-dates-table th:nth-child(4), 
+#brcc-dates-table td:nth-child(4) { 
+    width: 30%; /* Increased width for Eventbrite Ticket ID column */
+}
+
+#brcc-dates-table th:nth-child(5), 
+#brcc-dates-table td:nth-child(5) { 
+    width: 22%; 
+}
+
+#brcc-dates-table th:nth-child(6), 
+#brcc-dates-table td:nth-child(6) { 
+    width: 13%; 
+}
+
+/* Improved padding and vertical alignment */
+#brcc-dates-table th {
+    padding: 12px 10px;
+    vertical-align: middle;
+}
+
+#brcc-dates-table td {
+    padding: 15px 10px;
+    vertical-align: middle;
+}
+
+/* Action button styling */
+.brcc-test-date-mapping, 
+.brcc-add-time-slot {
+    padding: 4px 12px;
+    margin: 2px 5px 2px 0;
+    min-height: 32px;
+    white-space: nowrap;
+}
+
+/* Time selector styling */
+.brcc-time-selector {
+    width: 100%;
+    min-width: 120px;
+    padding: 6px 8px;
+    height: 34px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+/* Make form controls consistent */
+#brcc-dates-table input[type="text"],
+#brcc-dates-table select {
+    height: 34px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.07);
+}
+
+/* Ensure inputs respect their container width */
+#brcc-dates-table input[type="text"] {
+    width: 100%;
+    box-sizing: border-box;
+}
+
+/* Add hover effect to interactive elements */
+#brcc-dates-table button:hover,
+.brcc-mapping-input-group button:hover {
+    background-color: #f0f0f0;
+}
+
+/* Improve button text readability */
+.button {
+    font-weight: 500;
+}
