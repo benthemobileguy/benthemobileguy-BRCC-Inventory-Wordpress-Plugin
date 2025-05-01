@@ -77,6 +77,11 @@ class BRCC_Enhanced_Mappings
         $all_mappings = get_option('brcc_product_mappings', array());
         $saved_date_mappings = isset($all_mappings[$product_id . '_dates']) ? $all_mappings[$product_id . '_dates'] : array();
         
+        BRCC_Helpers::log_debug('get_product_dates_enhanced: Retrieved saved mappings', [
+            'product_id' => $product_id,
+            'mappings_count' => count($saved_date_mappings)
+        ]);
+        
         $dates_from_saved = array();
 
         foreach ($saved_date_mappings as $key => $mapping_data) {
@@ -107,38 +112,48 @@ class BRCC_Enhanced_Mappings
             $formatted_date = $timestamp ? date_i18n(get_option('date_format'), $timestamp) : $date;
             $formatted_time = $time ? date_i18n(get_option('time_format'), $timestamp) : null;
 
+            // Get ticket class ID from various possible sources in the saved data
+            $ticket_class_id = '';
+            if (isset($mapping_data['eventbrite_id']) && !empty($mapping_data['eventbrite_id'])) {
+                $ticket_class_id = $mapping_data['eventbrite_id'];
+            } elseif (isset($mapping_data['ticket_class_id']) && !empty($mapping_data['ticket_class_id'])) {
+                $ticket_class_id = $mapping_data['ticket_class_id'];
+            } elseif (isset($mapping_data['manual_eventbrite_id']) && !empty($mapping_data['manual_eventbrite_id'])) {
+                $ticket_class_id = $mapping_data['manual_eventbrite_id'];
+            }
+
+            BRCC_Helpers::log_debug('get_product_dates_enhanced: Processing saved mapping', [
+                'key' => $key,
+                'date' => $date,
+                'ticket_class_id_sources' => [
+                    'eventbrite_id' => isset($mapping_data['eventbrite_id']) ? $mapping_data['eventbrite_id'] : 'NOT SET',
+                    'ticket_class_id' => isset($mapping_data['ticket_class_id']) ? $mapping_data['ticket_class_id'] : 'NOT SET',
+                    'manual_eventbrite_id' => isset($mapping_data['manual_eventbrite_id']) ? $mapping_data['manual_eventbrite_id'] : 'NOT SET'
+                ],
+                'resolved_ticket_class_id' => $ticket_class_id
+            ]);
+
             $dates_from_saved[$key] = array( // Use the original key to preserve structure
                 'date' => $date,
                 'time' => $time, // Store H:i format if available
                 'formatted_date' => $formatted_date,
                 'formatted_time' => $formatted_time,
-                'eventbrite_id' => isset($mapping_data['eventbrite_id']) ? $mapping_data['eventbrite_id'] : '', // Dropdown ID
+                'eventbrite_event_id' => isset($mapping_data['eventbrite_event_id']) ? $mapping_data['eventbrite_event_id'] : '',
                 'square_id' => isset($mapping_data['square_id']) ? $mapping_data['square_id'] : '',
-                'manual_eventbrite_id' => isset($mapping_data['manual_eventbrite_id']) ? $mapping_data['manual_eventbrite_id'] : '', // Manual ID
+                // Send ALL possible keys for ticket class ID for maximum compatibility
+                'ticket_class_id' => $ticket_class_id,
+                'eventbrite_id' => $ticket_class_id,
+                'manual_eventbrite_id' => $ticket_class_id,
                 'from_saved' => true // Indicate this came from saved data
             );
         }
         // --- End: Prioritize SAVED Data ---
 
-
         // --- Start: Optional Eventbrite Suggestions (if needed in future) ---
         // This section could be re-added later if suggestion fetching is desired.
         // For now, we focus on retrieving what was saved.
         $suggestions = array();
-        // $eventbrite_integration = null; // Initialize - Moved down
-        // $product_mappings = null; // Initialize - Not needed here
-
-        /* // Example structure if suggestions were re-enabled:
-        if ($fetch_from_eventbrite) {
-             $eventbrite_integration = new BRCC_Eventbrite_Integration();
-             $product_mappings = new BRCC_Product_Mappings();
-             // ... [Logic to fetch suggestions based on product name, day, time etc.] ...
-             // ... [Logic to merge suggestions with $dates_from_saved, avoiding duplicates] ...
-             // Make sure suggestions don't overwrite 'from_saved' data unless explicitly intended.
-        }
-        */
         // --- End: Optional Eventbrite Suggestions ---
-
 
         // --- Final Preparation ---
         // Sort the results, e.g., by date
@@ -150,67 +165,66 @@ class BRCC_Enhanced_Mappings
 
         // Get base ID for context if needed (might not be necessary anymore)
         $base_mapping = isset($all_mappings[$product_id]) ? $all_mappings[$product_id] : array();
-        $base_id = isset($base_mapping['eventbrite_id']) ? $base_mapping['eventbrite_id'] : '';
+        // Use eventbrite_id for the base ticket class ID
+        $base_ticket_class_id = isset($base_mapping['eventbrite_id']) ? $base_mapping['eventbrite_id'] : ''; // Use eventbrite_id
+        $base_event_id = isset($base_mapping['eventbrite_event_id']) ? $base_mapping['eventbrite_event_id'] : ''; // Also get base event ID
 
         // --- Get available event options for dropdowns ---
-        // ** MODIFICATION START: Skip fetching all events to prevent timeout **
-        $event_options = array(); 
-        BRCC_Helpers::log_info('get_product_dates_enhanced: Skipping full event list fetch for dropdown population.');
-        
-        // ** Add currently saved IDs to the options so they are selectable **
-        foreach($dates_from_saved as $saved_data) {
-            $current_eb_id = $saved_data['eventbrite_id'];
-            $current_manual_id = $saved_data['manual_eventbrite_id'];
-            
-            // Add dropdown ID if not already present
-            if (!empty($current_eb_id) && !isset($event_options[$current_eb_id])) {
-                 // We don't have the name here, just use the ID
-                 $event_options[$current_eb_id] = 'Event/Ticket ID: ' . $current_eb_id; 
-            }
-            // Add manual ID if different and not already present
-            if (!empty($current_manual_id) && $current_manual_id !== $current_eb_id && !isset($event_options[$current_manual_id])) {
-                 $event_options[$current_manual_id] = 'Event/Ticket ID: ' . $current_manual_id;
-            }
-        }
-        
-        /* // ** ORIGINAL CODE - COMMENTED OUT **
-        if (!$eventbrite_integration) $eventbrite_integration = new BRCC_Eventbrite_Integration();
-        $org_events = $eventbrite_integration->get_organization_events('live,started,ended'); // Fetch broader range
+        $event_options = array();
+        $eventbrite_integration = new BRCC_Eventbrite_Integration(); // Instantiate earlier
+        BRCC_Helpers::log_info('get_product_dates_enhanced: Fetching Eventbrite events for dropdown population.');
+
+        // Fetch live, started, and ended events to populate dropdown
+        $org_events = $eventbrite_integration->get_organization_events('live,started,ended');
+
         if (!is_wp_error($org_events)) {
              foreach ($org_events as $event) {
                  if (isset($event['id']) && isset($event['name']['text'])) {
-                     // Consider adding date/time to the option text for clarity
+                     // Format option text with name and date/time
                      $option_text = $event['name']['text'];
                      if(isset($event['start']['local'])) {
-                         $option_text .= ' (' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($event['start']['local'])) . ')';
-                     }
-                     // We might need ticket class IDs here instead of event IDs depending on what's saved/used
-                     // $event_options[$event['id']] = $option_text; 
-                     
-                     // Let's assume we need ticket class IDs for the dropdown
-                     if (isset($event['ticket_classes']) && is_array($event['ticket_classes'])) {
-                         foreach($event['ticket_classes'] as $ticket) {
-                             if (isset($ticket['id']) && isset($ticket['name'])) {
-                                 // Prevent duplicates, maybe add event name for context
-                                 if (!isset($event_options[$ticket['id']])) {
-                                      $event_options[$ticket['id']] = $ticket['name'] . ' - ' . $event['name']['text'];
-                                 }
-                             }
+                         try {
+                             $dt = new DateTime($event['start']['local']);
+                             // Use a consistent format, e.g., Y-m-d H:i
+                             $option_text .= ' (' . $dt->format('Y-m-d H:i') . ')';
+                         } catch (Exception $e) {
+                             // Handle potential date parsing errors gracefully
+                             $option_text .= ' (Invalid Date)';
                          }
                      }
+                     // Use Event ID as the key for the dropdown options
+                     $event_options[$event['id']] = $option_text;
                  }
              }
+             BRCC_Helpers::log_debug('get_product_dates_enhanced: Populated event options from API.', ['count' => count($event_options)]);
         } else {
-            BRCC_Helpers::log_error('get_product_dates_enhanced: Failed to get organization events for dropdown.', $org_events);
+            BRCC_Helpers::log_error('get_product_dates_enhanced: Failed to get organization events for dropdown.', ['error' => $org_events->get_error_message()]);
+            // Optionally add a default error message to the dropdown
+             $event_options['error'] = 'Error loading events';
         }
-        */ // ** END ORIGINAL CODE **
-        // ** MODIFICATION END **
 
+        // Ensure currently saved Event IDs are in the options list, even if not returned by API (e.g., old events)
+        foreach($dates_from_saved as $saved_data) {
+            $current_event_id = isset($saved_data['eventbrite_event_id']) ? $saved_data['eventbrite_event_id'] : '';
+            if (!empty($current_event_id) && !isset($event_options[$current_event_id])) {
+                 // Add it with a generic label indicating it's from saved data
+                 $event_options[$current_event_id] = 'Event ID: ' . $current_event_id . ' (Saved)';
+                 BRCC_Helpers::log_debug('get_product_dates_enhanced: Added saved Event ID to options.', ['event_id' => $current_event_id]);
+            }
+        }
+
+        // --- DEBUG: Log final data before returning ---
+        BRCC_Helpers::log_debug('get_product_dates_enhanced: Returning data structure.', [
+            'dates_count' => count($dates_from_saved),
+            'events_count' => count($event_options),
+            'base_event_id' => $base_event_id
+        ]);
+        // --- END DEBUG ---
 
         return array(
             'dates' => array_values($dates_from_saved), // Return as a simple array for JS
-            'events' => $event_options, // Pass event options for dropdowns (now only contains saved IDs)
-            'base_id' => $base_id, // Keep for context if needed elsewhere
+            'events' => $event_options, // Pass full event options for dropdowns
+            'base_id' => $base_event_id, // Corrected variable name // Keep for context if needed elsewhere
             'suggestions' => $suggestions, // Keep if suggestions are added back
             'availableTimes' => $this->get_common_times() // Keep if needed
         );
@@ -265,17 +279,23 @@ class BRCC_Enhanced_Mappings
         // Get mappings from request
         $mappings = isset($_POST['mappings']) ? $_POST['mappings'] : array();
 
+        BRCC_Helpers::log_debug('ajax_save_product_date_mappings_enhanced: Received mappings data', [
+            'product_id' => $product_id,
+            'mappings_count' => count($mappings)
+        ]);
+
         // Check if test mode is enabled
         if (method_exists('BRCC_Helpers', 'is_test_mode') && BRCC_Helpers::is_test_mode()) {
             if (method_exists('BRCC_Helpers', 'log_operation')) {
                 BRCC_Helpers::log_operation(
-                    'Admin',
-                    'Save Date Mappings',
+                    'Admin', // component
+                    'Save Date Mappings', // operation
                     sprintf(
                         __('Would save %d date mappings for product ID %s', 'brcc-inventory-tracker'),
                         count($mappings),
                         $product_id
-                    )
+                    ), // message
+                    'info' // log_type
                 );
             }
 
@@ -289,13 +309,14 @@ class BRCC_Enhanced_Mappings
         // Log in live mode if enabled
         if (method_exists('BRCC_Helpers', 'should_log') && BRCC_Helpers::should_log() && method_exists('BRCC_Helpers', 'log_operation')) {
             BRCC_Helpers::log_operation(
-                'Admin',
-                'Save Date Mappings',
+                'Admin', // component
+                'Save Date Mappings', // operation
                 sprintf(
                     __('Saving %d date mappings for product ID %s (Live Mode)', 'brcc-inventory-tracker'),
                     count($mappings),
                     $product_id
-                )
+                ), // message
+                'info' // log_type
             );
         }
 
@@ -303,13 +324,11 @@ class BRCC_Enhanced_Mappings
         $all_mappings = get_option('brcc_product_mappings', array());
 
         // Initialize date mappings for this product if needed
-        // We will overwrite the specific keys sent, not clear the whole array
         if (!isset($all_mappings[$product_id . '_dates'])) {
              $all_mappings[$product_id . '_dates'] = array();
         }
-        // REMOVED: $all_mappings[$product_id . '_dates'] = array(); // Don't clear all, just update sent ones
 
-        // Keep track of keys processed to remove old ones if necessary (optional, depends on desired behavior)
+        // Keep track of keys processed to remove old ones if necessary
         $processed_keys = array(); 
 
         // Process each mapping sent from JS
@@ -322,17 +341,39 @@ class BRCC_Enhanced_Mappings
             
             $date = sanitize_text_field($mapping['date']);
             // Get time from JS if sent, otherwise null
-            $time = isset($mapping['time']) && preg_match('/^\d{2}:\d{2}$/', $mapping['time']) ? sanitize_text_field($mapping['time']) : null; 
-            $eventbrite_id = isset($mapping['eventbrite_event_id']) ? sanitize_text_field($mapping['eventbrite_event_id']) : ''; // Dropdown value
-            $square_id = isset($mapping['square_id']) ? sanitize_text_field($mapping['square_id']) : ''; // Keep if used
-            $manual_eventbrite_id = isset($mapping['manual_eventbrite_id']) ? sanitize_text_field($mapping['manual_eventbrite_id']) : ''; // Manual input value
+            $time = isset($mapping['time']) && preg_match('/^\d{2}:\d{2}$/', $mapping['time']) ? sanitize_text_field($mapping['time']) : null;
+            $selected_event_id = isset($mapping['eventbrite_event_id']) ? sanitize_text_field($mapping['eventbrite_event_id']) : '';
 
-            // Determine the primary ID to use (prefer manual if provided)
-            $primary_eventbrite_id = !empty($manual_eventbrite_id) ? $manual_eventbrite_id : $eventbrite_id;
+            // Get Square ID
+            $square_id = isset($mapping['square_id']) ? sanitize_text_field($mapping['square_id']) : '';
 
-            // Skip if no date or no ID (neither dropdown nor manual) is provided
-            // Also skip if no Square ID is provided, assuming one is needed for a valid mapping row now
-            if (empty($date) || (empty($primary_eventbrite_id) && empty($square_id))) {
+            // Get ticket class ID from all possible sources in the request data
+            $ticket_class_id = '';
+            
+            // Log all possible sources for debugging
+            BRCC_Helpers::log_debug('ajax_save_product_date_mappings_enhanced: Received ticket class ID keys', [
+                'date' => $date,
+                'manual_eventbrite_id' => isset($mapping['manual_eventbrite_id']) ? $mapping['manual_eventbrite_id'] : 'NOT SET',
+                'ticket_class_id' => isset($mapping['ticket_class_id']) ? $mapping['ticket_class_id'] : 'NOT SET',
+                'eventbrite_id' => isset($mapping['eventbrite_id']) ? $mapping['eventbrite_id'] : 'NOT SET'
+            ]);
+
+            // Process in order of preference 
+            if (isset($mapping['manual_eventbrite_id']) && !empty($mapping['manual_eventbrite_id'])) {
+                $ticket_class_id = sanitize_text_field($mapping['manual_eventbrite_id']);
+            } elseif (isset($mapping['ticket_class_id']) && !empty($mapping['ticket_class_id'])) {
+                $ticket_class_id = sanitize_text_field($mapping['ticket_class_id']);
+            } elseif (isset($mapping['eventbrite_id']) && !empty($mapping['eventbrite_id'])) {
+                $ticket_class_id = sanitize_text_field($mapping['eventbrite_id']);
+            }
+
+            // Skip if no date OR if both Eventbrite Ticket Class ID and Square ID are missing
+            if (empty($date) || (empty($ticket_class_id) && empty($square_id))) {
+                 BRCC_Helpers::log_debug('ajax_save_product_date_mappings_enhanced: Skipping mapping due to missing essential data', [
+                     'date' => $date,
+                     'ticket_class_id' => $ticket_class_id,
+                     'square_id' => $square_id
+                 ]);
                  continue;
             }
 
@@ -340,30 +381,42 @@ class BRCC_Enhanced_Mappings
             $key = $time ? $date . '_' . $time : $date;
             $processed_keys[$key] = true; // Mark this key as processed
 
-            // Save mapping using the determined key
+            // Save mapping - Store with ALL possible keys for maximum compatibility
             $all_mappings[$product_id . '_dates'][$key] = array(
-                'eventbrite_id' => $eventbrite_id, // Still save dropdown value if needed elsewhere
+                'eventbrite_event_id' => $selected_event_id,
                 'square_id' => $square_id,
-                'manual_eventbrite_id' => $manual_eventbrite_id // Save manual ID
+                // Store ticket class ID under all common key names for maximum compatibility
+                'eventbrite_id' => $ticket_class_id,      // Primary key (normalized from database)
+                'ticket_class_id' => $ticket_class_id,    // For JS compatibility 
+                'manual_eventbrite_id' => $ticket_class_id // For legacy compatibility
             );
 
+            BRCC_Helpers::log_debug('ajax_save_product_date_mappings_enhanced: Saving mapping data for key', [
+                'key' => $key,
+                'data' => $all_mappings[$product_id . '_dates'][$key]
+            ]);
+
             $successful_mappings++;
-            
         }
 
-        // Optional: Remove mappings for keys that were NOT sent in this save request
-        // This ensures that removing a row in the UI and saving removes it from storage.
-        // If you want saves to be purely additive/update, comment out this loop.
+        // Remove mappings for keys that were NOT sent in this save request
         foreach (array_keys($all_mappings[$product_id . '_dates']) as $existing_key) {
             if (!isset($processed_keys[$existing_key])) {
+                BRCC_Helpers::log_debug('ajax_save_product_date_mappings_enhanced: Removing stale mapping key', [
+                    'product_id' => $product_id,
+                    'key' => $existing_key
+                ]);
                 unset($all_mappings[$product_id . '_dates'][$existing_key]);
-                 BRCC_Helpers::log_debug('ajax_save_product_date_mappings_enhanced: Removing stale mapping key.', ['product_id' => $product_id, 'key' => $existing_key]);
             }
         }
 
-
-        // Save all mappings
+        // Save all mappings to database
         update_option('brcc_product_mappings', $all_mappings);
+
+        BRCC_Helpers::log_debug('ajax_save_product_date_mappings_enhanced: Successfully saved mappings', [
+            'product_id' => $product_id,
+            'successful_mappings' => $successful_mappings
+        ]);
 
         wp_send_json_success(array(
             'message' => sprintf(
@@ -372,14 +425,6 @@ class BRCC_Enhanced_Mappings
             )
         ));
     }
-
-    // REMOVED: AJAX handler to fetch Eventbrite event details (like time) from an ID.
-    /*
-    public function ajax_get_event_details_from_id() {
-        // ... (code removed) ...
-    }
-    */
-
 
     /**
      * Get common time slots for dropdown

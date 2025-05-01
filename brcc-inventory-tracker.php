@@ -20,21 +20,41 @@ if (!defined('ABSPATH')) {
 
 /**
  * Main BRCC Inventory Tracker class
+ * 
+ * This is the main class for the BRCC Inventory Tracker plugin. It handles
+ * initialization, activation, deactivation, and core functionality of the plugin.
+ * It uses a singleton pattern to ensure only one instance is running.
  */
 class BRCC_Inventory_Tracker
 {
     /**
      * Plugin version
+     * 
+     * @var string
      */
     const VERSION = '2.0.0';
 
     /**
      * Instance of this class
+     * 
+     * @var BRCC_Inventory_Tracker
      */
     protected static $instance = null;
 
     /**
+     * Admin class instance
+     * 
+     * @var BRCC_Admin
+     */
+    public $admin;
+
+    /**
      * Return an instance of this class
+     * 
+     * This method implements the singleton pattern to ensure only one instance
+     * of the plugin is running at any time.
+     * 
+     * @return BRCC_Inventory_Tracker The single instance of this class
      */
     public static function get_instance()
     {
@@ -46,6 +66,9 @@ class BRCC_Inventory_Tracker
 
     /**
      * Constructor - setup plugin hooks
+     * 
+     * Initializes the plugin by defining constants, checking dependencies,
+     * including required files, and setting up hooks.
      */
     public function __construct()
     {
@@ -67,6 +90,8 @@ class BRCC_Inventory_Tracker
 
     /**
      * Check if WooCommerce is active
+     * 
+     * @return bool True if WooCommerce is active, false otherwise
      */
     private function is_woocommerce_active()
     {
@@ -78,6 +103,8 @@ class BRCC_Inventory_Tracker
 
     /**
      * Define constants
+     * 
+     * Sets up plugin constants for paths, URLs, and version information.
      */
     private function define_constants()
     {
@@ -93,22 +120,26 @@ class BRCC_Inventory_Tracker
         if (!defined('BRCC_INVENTORY_TRACKER_BASENAME')) {
             define('BRCC_INVENTORY_TRACKER_BASENAME', plugin_basename(__FILE__));
         }
+        if (!defined('BRCC_INVENTORY_TRACKER_PLUGIN_FILE')) {
+            define('BRCC_INVENTORY_TRACKER_PLUGIN_FILE', __FILE__);
+        }
     }
 
     /**
      * Include required files
      * 
-     * Files are included in order of dependency
+     * Includes all necessary PHP files for the plugin to function.
+     * Files are included in order of dependency.
      */
     private function includes()
     {
         // Include constants class first
-         require_once BRCC_INVENTORY_TRACKER_PLUGIN_DIR . 'includes/class-brcc-constants.php';
+        require_once BRCC_INVENTORY_TRACKER_PLUGIN_DIR . 'includes/class-brcc-constants.php';
 
-        //  Include helper class
+        // Include helper class
         require_once BRCC_INVENTORY_TRACKER_PLUGIN_DIR . 'includes/class-brcc-helpers.php';
 
-        //  Include product mappings class early since other classes depend on it
+        // Include product mappings class early since other classes depend on it
         require_once BRCC_INVENTORY_TRACKER_PLUGIN_DIR . 'includes/class-brcc-product-mappings.php';
 
         // Include core files
@@ -120,17 +151,18 @@ class BRCC_Inventory_Tracker
         require_once BRCC_INVENTORY_TRACKER_PLUGIN_DIR . 'includes/integrations/class-brcc-square-integration.php';
         require_once BRCC_INVENTORY_TRACKER_PLUGIN_DIR . 'includes/class-brcc-enhanced-mappings.php';
 
-        // Include admin files
-        // Only load admin class on actual admin pages, not during AJAX requests
-        if (is_admin() && !wp_doing_ajax()) {
-            require_once BRCC_INVENTORY_TRACKER_PLUGIN_DIR . 'includes/admin/class-brcc-admin.php';
-            // Instantiate the admin class
-            new BRCC_Admin();
-        }
+        // Include admin files - updated to include all admin components
+        require_once BRCC_INVENTORY_TRACKER_PLUGIN_DIR . 'includes/admin/class-brcc-admin-ajax.php';
+        require_once BRCC_INVENTORY_TRACKER_PLUGIN_DIR . 'includes/admin/class-brcc-admin-settings.php';
+        require_once BRCC_INVENTORY_TRACKER_PLUGIN_DIR . 'includes/admin/class-brcc-admin-pages.php';
+        require_once BRCC_INVENTORY_TRACKER_PLUGIN_DIR . 'includes/admin/class-brcc-admin-cron.php';
+        require_once BRCC_INVENTORY_TRACKER_PLUGIN_DIR . 'includes/admin/class-brcc-admin.php';
     }
 
     /**
      * Initialize hooks
+     * 
+     * Sets up WordPress hooks for activation, deactivation, and other plugin functionality.
      */
     private function init_hooks()
     {
@@ -147,11 +179,29 @@ class BRCC_Inventory_Tracker
         add_action('init', array($this, 'instantiate_core_classes'));
 
         // Add CSS customizations for the front-end display
-    //    add_action('wp_enqueue_scripts', array($this, 'enqueue_frontend_styles'));
+        // add_action('wp_enqueue_scripts', array($this, 'enqueue_frontend_styles'));
+
+        // Add admin hooks
+        if (is_admin()) {
+            // Instantiate admin class - this now initializes all admin components
+            $this->admin = new BRCC_Admin();
+
+            // Add settings link to plugins page
+            add_filter('plugin_action_links_' . BRCC_INVENTORY_TRACKER_BASENAME, array($this, 'add_settings_link'));
+
+            // Enqueue admin scripts and styles
+            add_action('admin_enqueue_scripts', array($this->admin, 'enqueue_admin_scripts'));
+
+            // Add body class
+            add_filter('admin_body_class', array($this->admin, 'add_body_class'));
+        }
     }
 
     /**
      * Activation function
+     * 
+     * Runs when the plugin is activated. Creates necessary database tables,
+     * sets default options, and sets up scheduled tasks.
      */
     public function activate()
     {
@@ -164,15 +214,20 @@ class BRCC_Inventory_Tracker
 
     /**
      * Deactivation function
+     * 
+     * Runs when the plugin is deactivated. Cleans up scheduled tasks.
      */
     public function deactivate()
     {
         // Clear any scheduled hooks
         wp_clear_scheduled_hook('brcc_sync_inventory');
+        wp_clear_scheduled_hook('brcc_daily_attendee_email');
     }
 
     /**
      * Create default options
+     * 
+     * Sets up default options for the plugin if they don't already exist.
      */
     private function create_options()
     {
@@ -191,15 +246,42 @@ class BRCC_Inventory_Tracker
             add_option('brcc_api_settings', array(
                 'api_key' => $this->generate_api_key(),
                 'eventbrite_token' => '',
+                'eventbrite_org_id' => '',
+                'square_access_token' => '',
+                'square_location_id' => '',
+                'square_webhook_signature_key' => '',
+                'square_sandbox' => false,
                 'sync_interval' => 15, // minutes
                 'test_mode' => false,
                 'live_logging' => false,
             ));
         }
+
+        // Create logs table if it doesn't exist
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'brcc_operation_logs';
+        $charset_collate = $wpdb->get_charset_collate();
+
+        if ($wpdb->get_var("SHOW TABLES LIKE '$table_name'") != $table_name) {
+            $sql = "CREATE TABLE $table_name (
+                id bigint(20) NOT NULL AUTO_INCREMENT,
+                timestamp datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
+                component varchar(50) NOT NULL,
+                operation varchar(100) NOT NULL,
+                message text NOT NULL,
+                log_type varchar(20) DEFAULT 'info' NOT NULL,
+                PRIMARY KEY  (id)
+            ) $charset_collate;";
+
+            require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+            dbDelta($sql);
+        }
     }
 
     /**
      * Generate a random API key
+     * 
+     * @return string A randomly generated API key
      */
     private function generate_api_key()
     {
@@ -208,19 +290,32 @@ class BRCC_Inventory_Tracker
 
     /**
      * Set up scheduled events
+     * 
+     * Configures WordPress cron jobs for inventory synchronization and
+     * daily attendee email sending.
      */
     private function setup_scheduling()
     {
+        // Set up inventory sync schedule
         if (!wp_next_scheduled('brcc_sync_inventory')) {
             $settings = get_option('brcc_api_settings');
             $interval = isset($settings['sync_interval']) ? (int)$settings['sync_interval'] * 60 : 15 * 60; // Convert to seconds
 
             wp_schedule_event(time(), 'brcc_' . $interval . '_seconds', 'brcc_sync_inventory');
         }
+
+        // Set up daily attendee email schedule
+        if (!wp_next_scheduled('brcc_daily_attendee_email')) {
+            // Schedule for 6 AM every day
+            $timestamp = strtotime('tomorrow 6:00 AM');
+            wp_schedule_event($timestamp, 'daily', 'brcc_daily_attendee_email');
+        }
     }
 
     /**
      * Display notice if WooCommerce is not active
+     * 
+     * Shows an admin notice when WooCommerce is not active, as it's a required dependency.
      */
     public function woocommerce_missing_notice()
     {
@@ -233,6 +328,8 @@ class BRCC_Inventory_Tracker
 
     /**
      * Enqueue frontend styles
+     * 
+     * Loads CSS styles for the front-end of the website.
      */
     public function enqueue_frontend_styles()
     {
@@ -246,6 +343,8 @@ class BRCC_Inventory_Tracker
 
     /**
      * Load essential plugin components like textdomain and cron schedules.
+     * 
+     * Loads text domain for internationalization and registers custom cron intervals.
      * Hooked to plugins_loaded.
      */
     public function load_plugin_essentials()
@@ -258,8 +357,9 @@ class BRCC_Inventory_Tracker
     }
 
     /**
-     * Instantiate core classes that add hooks.
-     * Hooked to WordPress init action.
+     * Instantiate core classes
+     * 
+     * Creates instances of the core plugin classes.
      */
     public function instantiate_core_classes()
     {
@@ -274,373 +374,15 @@ class BRCC_Inventory_Tracker
         new BRCC_Eventbrite_Integration();
         new BRCC_Square_Integration();
         new BRCC_Enhanced_Mappings();
-
-        // Register AJAX handlers (can also be done here or remain in constructor/init_hooks)
-        // Let's keep them registered early via init_hooks for now.
-        // $this->register_ajax_handlers(); // Moved registration earlier
-    }
-
-    /**
-     * Register AJAX handlers
-     */
-    private function register_ajax_handlers()
-    {
-        // Note: These AJAX actions are added during the main class __construct via init_hooks
-        // Regenerate API key
-        add_action('wp_ajax_brcc_regenerate_api_key', array($this, 'ajax_regenerate_api_key'));
-
-        // Sync inventory now
-        add_action('wp_ajax_brcc_sync_inventory_now', array($this, 'ajax_sync_inventory_now'));
-
-        // Save product mappings
-        add_action('wp_ajax_brcc_save_product_mappings', array($this, 'ajax_save_product_mappings'));
-
-        // Test product mapping
-        add_action('wp_ajax_brcc_test_product_mapping', array($this, 'ajax_test_product_mapping'));
-
-        // Chart data
-        add_action('wp_ajax_brcc_get_chart_data', array($this, 'ajax_get_chart_data'));
-    }
-
-    /**
-     * AJAX: Regenerate API key
-     */
-    public function ajax_regenerate_api_key()
-    {
-        // Check nonce
-        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'brcc-admin-nonce')) {
-            wp_send_json_error(array('message' => __('Security check failed.', 'brcc-inventory-tracker')));
-        }
-
-        // Generate new API key
-        $api_key = $this->generate_api_key();
-
-        // Update settings
-        $settings = get_option('brcc_api_settings', array());
-        $settings['api_key'] = $api_key;
-        update_option('brcc_api_settings', $settings);
-
-        wp_send_json_success(array(
-            'message' => __('API key regenerated successfully.', 'brcc-inventory-tracker'),
-            'api_key' => $api_key
-        ));
-    }
-
-    /**
-     * AJAX: Sync inventory now
-     */
-    public function ajax_sync_inventory_now()
-    {
-        // Check nonce
-        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'brcc-admin-nonce')) {
-            wp_send_json_error(array('message' => __('Security check failed.', 'brcc-inventory-tracker')));
-        }
-
-        // Check if test mode is enabled
-        if (BRCC_Helpers::is_test_mode()) {
-            BRCC_Helpers::log_operation(
-                'Admin',
-                'Manual Sync',
-                __('Manual sync triggered from admin dashboard', 'brcc-inventory-tracker')
-            );
-        } else if (BRCC_Helpers::should_log()) {
-            BRCC_Helpers::log_operation(
-                'Admin',
-                'Manual Sync',
-                __('Manual sync triggered from admin dashboard (Live Mode)', 'brcc-inventory-tracker')
-            );
-        }
-
-        // Trigger sync action
-        do_action('brcc_sync_inventory');
-
-        // Update last sync time
-        update_option('brcc_last_sync_time', time());
-
-        wp_send_json_success(array(
-            'message' => __('Inventory synchronized successfully.', 'brcc-inventory-tracker'),
-            'timestamp' => date_i18n(get_option('date_format') . ' ' . get_option('time_format')),
-            'test_mode' => BRCC_Helpers::is_test_mode()
-        ));
-    }
-
-    /**
-     * AJAX: Save product mappings
-     */
-    public function ajax_save_product_mappings()
-    {
-        // Check nonce
-        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'brcc-admin-nonce')) {
-            wp_send_json_error(array('message' => __('Security check failed.', 'brcc-inventory-tracker')));
-        }
-
-        // Get mappings from request
-        $mappings = isset($_POST['mappings']) ? $_POST['mappings'] : array();
-
-        // Sanitize mappings
-        $sanitized_mappings = array();
-        foreach ($mappings as $product_id => $mapping) {
-            $sanitized_mappings[absint($product_id)] = array(
-                'eventbrite_id' => sanitize_text_field($mapping['eventbrite_id'])
-            );
-        }
-
-        // Check if test mode is enabled
-        if (BRCC_Helpers::is_test_mode()) {
-            BRCC_Helpers::log_operation(
-                'Admin',
-                'Save Mappings',
-                sprintf(__('Would save %d product mappings', 'brcc-inventory-tracker'), count($sanitized_mappings))
-            );
-
-            wp_send_json_success(array(
-                'message' => __('Product mappings would be saved in Test Mode.', 'brcc-inventory-tracker') . ' ' .
-                    __('(No actual changes made)', 'brcc-inventory-tracker')
-            ));
-            return;
-        }
-
-        // Log in live mode if enabled
-        if (BRCC_Helpers::should_log()) {
-            BRCC_Helpers::log_operation(
-                'Admin',
-                'Save Mappings',
-                sprintf(__('Saving %d product mappings (Live Mode)', 'brcc-inventory-tracker'), count($sanitized_mappings))
-            );
-        }
-
-        // Save mappings
-        update_option('brcc_product_mappings', $sanitized_mappings);
-
-        wp_send_json_success(array(
-            'message' => __('Product mappings saved successfully.', 'brcc-inventory-tracker')
-        ));
-    }
-
-    /**
-     * AJAX: Test product mapping
-     */
-    public function ajax_test_product_mapping()
-    {
-        // Check nonce
-        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'brcc-admin-nonce')) {
-            wp_send_json_error(array('message' => __('Security check failed.', 'brcc-inventory-tracker')));
-        }
-
-        $product_id = isset($_POST['product_id']) ? absint($_POST['product_id']) : 0;
-        $eventbrite_id = isset($_POST['eventbrite_id']) ? sanitize_text_field($_POST['eventbrite_id']) : '';
-
-        $results = array();
-
-        // Get the product name for more informative messages
-        $product = wc_get_product($product_id);
-        $product_name = $product ? $product->get_name() : "Product #$product_id";
-
-        // Log test action in test mode
-        if (BRCC_Helpers::is_test_mode()) {
-            if (!empty($eventbrite_id)) {
-                BRCC_Helpers::log_operation(
-                    'Admin',
-                    'Test Eventbrite Connection',
-                    sprintf(
-                        __('Testing Eventbrite connection for product ID %s with Eventbrite ID %s', 'brcc-inventory-tracker'),
-                        $product_id,
-                        $eventbrite_id
-                    )
-                );
-            }
-        } else if (BRCC_Helpers::should_log()) {
-            if (!empty($eventbrite_id)) {
-                BRCC_Helpers::log_operation(
-                    'Admin',
-                    'Test Eventbrite Connection',
-                    sprintf(
-                        __('Testing Eventbrite connection for product ID %s with Eventbrite ID %s (Live Mode)', 'brcc-inventory-tracker'),
-                        $product_id,
-                        $eventbrite_id
-                    )
-                );
-            }
-        }
-
-        // Basic validation for Eventbrite ID
-        if (!empty($eventbrite_id)) {
-            $settings = get_option('brcc_api_settings');
-            $has_eventbrite_token = !empty($settings['eventbrite_token']);
-
-            if (!$has_eventbrite_token) {
-                $results[] = __('Eventbrite configuration incomplete. Please add API Token in plugin settings.', 'brcc-inventory-tracker');
-            } else {
-                $results[] = sprintf(
-                    __('Eventbrite ID "%s" is linked to product "%s". Eventbrite credentials are configured.', 'brcc-inventory-tracker'),
-                    $eventbrite_id,
-                    $product_name
-                );
-
-                // Test the specific Ticket Class ID connection
-                if (class_exists('BRCC_Eventbrite_Integration')) {
-                    $eventbrite = new BRCC_Eventbrite_Integration();
-                    // Use test_ticket_connection to validate the specific ID
-                    $ticket_test = $eventbrite->test_ticket_connection($eventbrite_id);
-
-                    if (is_wp_error($ticket_test)) {
-                        // If the test returns an error (e.g., "path does not exist")
-                        $results[] = __('Eventbrite Ticket Class ID test failed:', 'brcc-inventory-tracker') . ' ' . $ticket_test->get_error_message();
-                    } else {
-                        // If the test succeeds, show details
-                        $results[] = __('Eventbrite Ticket Class ID connection successful!', 'brcc-inventory-tracker');
-                        if (isset($ticket_test['event_name'])) {
-                            $results[] = sprintf(__('Event: %s', 'brcc-inventory-tracker'), $ticket_test['event_name']);
-                        }
-                        if (isset($ticket_test['ticket_name'])) {
-                            $results[] = sprintf(__('Ticket Type: %s', 'brcc-inventory-tracker'), $ticket_test['ticket_name']);
-                        }
-                        if (isset($ticket_test['available'])) {
-                            $results[] = sprintf(__('Available: %d', 'brcc-inventory-tracker'), $ticket_test['available']);
-                        }
-                    }
-                } else {
-                    $results[] = __('Eventbrite Integration class not found.', 'brcc-inventory-tracker');
-                }
-            }
-        }
-
-        if (empty($results)) {
-            $results[] = __('No tests performed. Please enter an Eventbrite ID.', 'brcc-inventory-tracker');
-        }
-
-        // Add test mode notice
-        if (BRCC_Helpers::is_test_mode()) {
-            $results[] = __('Note: Tests work normally even in Test Mode.', 'brcc-inventory-tracker');
-        }
-
-        wp_send_json_success(array(
-            'message' => implode('<br>', $results)
-        ));
-    }
-
-    /**
-     * AJAX: Get chart data
-     */
-    public function ajax_get_chart_data()
-    {
-        // Check nonce
-        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'brcc-admin-nonce')) {
-            wp_send_json_error(array('message' => __('Security check failed.', 'brcc-inventory-tracker')));
-        }
-
-        $days = isset($_POST['days']) ? absint($_POST['days']) : 7;
-        $end_date = isset($_POST['end_date']) && !empty($_POST['end_date']) ? sanitize_text_field($_POST['end_date']) : current_time('Y-m-d');
-
-        // Calculate start date
-        $start_date = date('Y-m-d', strtotime("-{$days} days", strtotime($end_date)));
-
-        // Get sales tracker
-        $sales_tracker = new BRCC_Sales_Tracker();
-
-        // Get product summary for this date range
-        $product_summary = $sales_tracker->get_product_summary($start_date, $end_date);
-
-        // Prepare chart data
-        $chart_data = $this->prepare_chart_data($product_summary, $start_date, $end_date);
-
-        wp_send_json_success(array(
-            'chart_data' => $chart_data,
-            'test_mode' => BRCC_Helpers::is_test_mode()
-        ));
-    }
-
-    /**
-     * Prepare chart data from sales data
-     */
-    private function prepare_chart_data($product_summary, $start_date, $end_date)
-    {
-        // Create date range
-        $start_timestamp = strtotime($start_date);
-        $end_timestamp = strtotime($end_date);
-        $date_range = array();
-
-        // Populate date range
-        $current = $start_timestamp;
-        while ($current <= $end_timestamp) {
-            $date_range[] = date('Y-m-d', $current);
-            $current = strtotime('+1 day', $current);
-        }
-
-        // Initialize datasets
-        $datasets = array(
-            array(
-                'label' => __('All Products', 'brcc-inventory-tracker'),
-                'data' => array_fill(0, count($date_range), 0),
-                'backgroundColor' => 'rgba(54, 162, 235, 0.2)',
-                'borderColor' => 'rgba(54, 162, 235, 1)',
-                'borderWidth' => 2
-            )
-        );
-
-        // Add data sets for each product
-        $product_colors = array(
-            'rgba(255, 99, 132, 0.2)',
-            'rgba(75, 192, 192, 0.2)',
-            'rgba(255, 206, 86, 0.2)',
-            'rgba(153, 102, 255, 0.2)',
-            'rgba(255, 159, 64, 0.2)',
-        );
-        $product_borders = array(
-            'rgba(255, 99, 132, 1)',
-            'rgba(75, 192, 192, 1)',
-            'rgba(255, 206, 86, 1)',
-            'rgba(153, 102, 255, 1)',
-            'rgba(255, 159, 64, 1)',
-        );
-
-        $color_index = 0;
-        foreach ($product_summary as $product_id => $data) {
-            // Skip products with no date-specific data
-            if (empty($data['dates'])) {
-                continue;
-            }
-
-            // Add a dataset for this product
-            $product_dataset = array(
-                'label' => $data['name'],
-                'data' => array_fill(0, count($date_range), 0),
-                'backgroundColor' => $product_colors[$color_index % count($product_colors)],
-                'borderColor' => $product_borders[$color_index % count($product_borders)],
-                'borderWidth' => 2
-            );
-
-            $color_index++;
-
-            // Add data for each date
-            foreach ($data['dates'] as $date => $quantity) {
-                // Find the index for this date
-                $date_index = array_search($date, $date_range);
-                if ($date_index !== false) {
-                    // Update product dataset
-                    $product_dataset['data'][$date_index] = $quantity;
-
-                    // Update overall dataset
-                    $datasets[0]['data'][$date_index] += $quantity;
-                }
-            }
-
-            $datasets[] = $product_dataset;
-        }
-
-        // Format date labels
-        $labels = array_map(function ($date) {
-            return date_i18n('M j', strtotime($date));
-        }, $date_range);
-
-        return array(
-            'labels' => $labels,
-            'datasets' => $datasets
-        );
     }
 
     /**
      * Add custom cron intervals
+     * 
+     * Registers custom time intervals for WordPress cron jobs.
+     * 
+     * @param array $schedules Existing cron schedules
+     * @return array Modified cron schedules
      */
     public function add_cron_intervals($schedules)
     {
@@ -649,18 +391,38 @@ class BRCC_Inventory_Tracker
 
         $schedules['brcc_' . $interval . '_seconds'] = array(
             'interval' => $interval,
-            'display'  => sprintf(__('Every %d minutes', 'brcc-inventory-tracker'), $interval / 60),
+            'display' => sprintf(__('Every %d minutes', 'brcc-inventory-tracker'), $interval / 60)
         );
 
         return $schedules;
     }
+
+    /**
+     * Add settings link to plugin page
+     * 
+     * Adds a "Settings" link to the plugin's entry on the WordPress plugins page.
+     * 
+     * @param array $links Existing plugin action links
+     * @return array Modified plugin action links
+     */
+    public function add_settings_link($links)
+    {
+        $settings_link = '<a href="' . admin_url('admin.php?page=brcc-settings') . '">' . __('Settings', 'brcc-inventory-tracker') . '</a>';
+        array_unshift($links, $settings_link);
+        return $links;
+    }
+}
+
+/**
+ * Initialize the plugin
+ * 
+ * Creates an instance of the main plugin class and stores it in the global scope.
+ */
+function brcc_inventory_tracker_init()
+{
+    global $brcc_inventory_tracker;
+    $brcc_inventory_tracker = BRCC_Inventory_Tracker::get_instance();
 }
 
 // Initialize the plugin
-function brcc_inventory_tracker_init() {
-    // Returns the main instance of the plugin class
-    return BRCC_Inventory_Tracker::get_instance();
-}
-
-// Hook the initialization function to the 'plugins_loaded' action
-add_action('plugins_loaded', 'brcc_inventory_tracker_init');
+brcc_inventory_tracker_init();

@@ -31,6 +31,12 @@ class BRCC_Eventbrite_Integration {
      * Sales tracker instance
      */
     private $sales_tracker;
+    
+    /**
+     * Cache for all product mappings
+     * @var array
+     */
+    private $all_mappings;
 
     /**
      * Constructor - setup hooks
@@ -79,31 +85,31 @@ class BRCC_Eventbrite_Integration {
      *
      * @param array $args Arguments passed from wp_schedule_single_event.
      */
-public static function handle_scheduled_eventbrite_update($args) {
-    BRCC_Helpers::log_info('--- START handle_scheduled_eventbrite_update ---', $args);
+    public static function handle_scheduled_eventbrite_update($args) {
+        BRCC_Helpers::log_info('--- START handle_scheduled_eventbrite_update ---', $args);
 
-    // Basic validation of args
-    if (empty($args['order_id']) || empty($args['product_id'])) { // Removed quantity check as it's not needed for status update
-        BRCC_Helpers::log_error('handle_scheduled_eventbrite_update: Invalid arguments received (missing order_id or product_id).', $args);
-        return;
+        // Basic validation of args
+        if (empty($args['order_id']) || empty($args['product_id'])) { // Removed quantity check as it's not needed for status update
+            BRCC_Helpers::log_error('handle_scheduled_eventbrite_update: Invalid arguments received (missing order_id or product_id).', $args);
+            return;
+        }
+
+        // Need an instance to call the non-static update method
+        $instance = new self();
+
+        // Check if instance was created and product_mappings is available
+        if (!$instance || !$instance->product_mappings) {
+            BRCC_Helpers::log_error('handle_scheduled_eventbrite_update: Failed to create instance or access product mappings.');
+            return;
+        }
+
+        // Call the new event status update function instead of the old update_eventbrite_ticket_with_date
+        $product_id = $args['product_id'];
+        // We don't need order_id or quantity for just checking/updating status based on stock
+        $instance->update_eventbrite_event_status($product_id);
+        
+        BRCC_Helpers::log_info('--- END handle_scheduled_eventbrite_update ---', $args);
     }
-
-    // Need an instance to call the non-static update method
-    $instance = new self();
-
-    // Check if instance was created and product_mappings is available
-    if (!$instance || !$instance->product_mappings) {
-         BRCC_Helpers::log_error('handle_scheduled_eventbrite_update: Failed to create instance or access product mappings.');
-         return;
-    }
-
-    // Call the new event status update function instead of the old update_eventbrite_ticket_with_date
-    $product_id = $args['product_id'];
-    // We don't need order_id or quantity for just checking/updating status based on stock
-    $instance->update_eventbrite_event_status($product_id);
-    
-    BRCC_Helpers::log_info('--- END handle_scheduled_eventbrite_update ---', $args);
-}
 
     /**
      * Register webhook endpoint for Eventbrite
@@ -116,85 +122,87 @@ public static function handle_scheduled_eventbrite_update($args) {
         ));
         BRCC_Helpers::log_debug('Eventbrite webhook endpoint registered.'); // Restored debug log
     }
-/**
- * Find the WooCommerce Product ID using only our database mappings.
- * First looks for event by date/time, then by event ID.
- *
- * @param string $ticket_class_id Ignored - we don't use this anymore.
- * @param string|null $date Event date (Y-m-d).
- * @param string|null $time Event time (H:i).
- * @param string|null $event_id The Eventbrite Event ID.
- * @return int|null The WooCommerce Product ID, or null if not found.
- */
-public function find_product_id_for_event($ticket_class_id = null, $date = null, $time = null, $event_id = null) {
-    BRCC_Helpers::log_debug("find_product_id_for_event: Searching for Event ID: {$event_id}, Date: {$date}, Time: {$time}");
-    
-    $this->load_mappings(); // Ensure mappings are loaded
-    
-    // FIRST PRIORITY: Find by date and time (most specific match)
-    if ($date && $time) {
-        $date_time_key = $date . '_' . $time;
+
+    /**
+     * Find the WooCommerce Product ID using only our database mappings.
+     * First looks for event by date/time, then by event ID.
+     *
+     * @param string $ticket_class_id Ignored - we don't use this anymore.
+     * @param string|null $date Event date (Y-m-d).
+     * @param string|null $time Event time (H:i).
+     * @param string|null $event_id The Eventbrite Event ID.
+     * @return int|null The WooCommerce Product ID, or null if not found.
+     */
+    public function find_product_id_for_event($ticket_class_id = null, $date = null, $time = null, $event_id = null) {
+        BRCC_Helpers::log_debug("find_product_id_for_event: Searching for Event ID: {$event_id}, Date: {$date}, Time: {$time}");
         
-        // Check all products with date mappings
-        foreach ($this->all_mappings as $product_id_key => $mapping_data) {
-            if (strpos($product_id_key, '_dates') !== false) {
-                $base_product_id = (int) str_replace('_dates', '', $product_id_key);
-                
-                // Exact date/time match
-                if (isset($mapping_data[$date_time_key])) {
-                    BRCC_Helpers::log_info("Found exact date+time match: Product ID {$base_product_id} for Date: {$date}, Time: {$time}");
-                    return $base_product_id;
+        $this->load_mappings(); // Ensure mappings are loaded
+        
+        // FIRST PRIORITY: Find by date and time (most specific match)
+        if ($date && $time) {
+            $date_time_key = $date . '_' . $time;
+            
+            // Check all products with date mappings
+            foreach ($this->all_mappings as $product_id_key => $mapping_data) {
+                if (strpos($product_id_key, '_dates') !== false) {
+                    $base_product_id = (int) str_replace('_dates', '', $product_id_key);
+                    
+                    // Exact date/time match
+                    if (isset($mapping_data[$date_time_key])) {
+                        BRCC_Helpers::log_info("Found exact date+time match: Product ID {$base_product_id} for Date: {$date}, Time: {$time}");
+                        return $base_product_id;
+                    }
+                    
+                    // Try with time buffer (for slight time differences)
+                    foreach ($mapping_data as $mapped_date_time => $specific_mapping) {
+                        if (strpos($mapped_date_time, $date . '_') === 0) {  // Key starts with the date
+                            $stored_time = substr($mapped_date_time, strlen($date) + 1);  // Extract time part
+                            if (BRCC_Helpers::is_time_close($time, $stored_time, 60)) { // 60 minute buffer
+                                BRCC_Helpers::log_info("Found date+time (buffer) match: Product ID {$base_product_id} for Date: {$date}, Time: {$time}");
+                                return $base_product_id;
+                            }
+                        }
+                    }
                 }
-                
-                // Try with time buffer (for slight time differences)
-                foreach ($mapping_data as $mapped_date_time => $specific_mapping) {
-                    if (strpos($mapped_date_time, $date . '_') === 0) {  // Key starts with the date
-                        $stored_time = substr($mapped_date_time, strlen($date) + 1);  // Extract time part
-                        if (BRCC_Helpers::is_time_close($time, $stored_time, 60)) { // 60 minute buffer
-                            BRCC_Helpers::log_info("Found date+time (buffer) match: Product ID {$base_product_id} for Date: {$date}, Time: {$time}");
+            }
+        }
+        
+        // SECOND PRIORITY: Find by event ID if provided
+        if ($event_id) {
+            foreach ($this->all_mappings as $product_id_key => $mapping_data) {
+                // Skip "_dates" entries for this check
+                if (strpos($product_id_key, '_dates') === false && is_numeric($product_id_key)) {
+                    $product_id = (int) $product_id_key;
+                    
+                    // Check if this product has the matching event ID
+                    if (isset($mapping_data['eventbrite_event_id']) && $mapping_data['eventbrite_event_id'] == $event_id) {
+                        BRCC_Helpers::log_info("Found event ID match: Product ID {$product_id} for Event ID: {$event_id}");
+                        return $product_id;
+                    }
+                }
+            }
+            
+            // Also check date-specific mappings for event ID
+            foreach ($this->all_mappings as $product_id_key => $mapping_data) {
+                if (strpos($product_id_key, '_dates') !== false) {
+                    $base_product_id = (int) str_replace('_dates', '', $product_id_key);
+                    
+                    foreach ($mapping_data as $date_time_key => $specific_mapping) {
+                        if (isset($specific_mapping['eventbrite_event_id']) && $specific_mapping['eventbrite_event_id'] == $event_id) {
+                            BRCC_Helpers::log_info("Found event ID match in date mapping: Product ID {$base_product_id} for Event ID: {$event_id}");
                             return $base_product_id;
                         }
                     }
                 }
             }
         }
-    }
-    
-    // SECOND PRIORITY: Find by event ID if provided
-    if ($event_id) {
-        foreach ($this->all_mappings as $product_id_key => $mapping_data) {
-            // Skip "_dates" entries for this check
-            if (strpos($product_id_key, '_dates') === false && is_numeric($product_id_key)) {
-                $product_id = (int) $product_id_key;
-                
-                // Check if this product has the matching event ID
-                if (isset($mapping_data['eventbrite_event_id']) && $mapping_data['eventbrite_event_id'] == $event_id) {
-                    BRCC_Helpers::log_info("Found event ID match: Product ID {$product_id} for Event ID: {$event_id}");
-                    return $product_id;
-                }
-            }
-        }
         
-        // Also check date-specific mappings for event ID
-        foreach ($this->all_mappings as $product_id_key => $mapping_data) {
-            if (strpos($product_id_key, '_dates') !== false) {
-                $base_product_id = (int) str_replace('_dates', '', $product_id_key);
-                
-                foreach ($mapping_data as $date_time_key => $specific_mapping) {
-                    if (isset($specific_mapping['eventbrite_event_id']) && $specific_mapping['eventbrite_event_id'] == $event_id) {
-                        BRCC_Helpers::log_info("Found event ID match in date mapping: Product ID {$base_product_id} for Event ID: {$event_id}");
-                        return $base_product_id;
-                    }
-                }
-            }
-        }
+        // Log failure with all possible information
+        BRCC_Helpers::log_warning("No mapping found in database. Event ID: {$event_id}, Date: {$date}, Time: {$time}");
+        return null;
     }
-    
-    // Log failure with all possible information
-    BRCC_Helpers::log_warning("No mapping found in database. Event ID: {$event_id}, Date: {$date}, Time: {$time}");
-    return null;
-}
-/**
+
+    /**
      * Find the Eventbrite Ticket Class ID for a WooCommerce Product ID, potentially matching date/time.
      *
      * @param int $product_id WooCommerce Product ID.
@@ -213,35 +221,58 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
                 $date_time_key = $date . '_' . ($time ? $time : 'any'); // Use 'any' if time is null
 
                 // Try exact match (or date with 'any' time)
-                if (isset($this->all_mappings[$date_key][$date_time_key]['eventbrite_ticket_id'])) {
-                    BRCC_Helpers::log_info("Found exact date/time match for ticket ID: Product ID {$product_id}, Date: {$date}, Time: {$time}");
+                // Check manual_eventbrite_id first, fallback to eventbrite_ticket_id for potential backward compatibility? Or just use manual? Let's prioritize manual.
+                if (isset($this->all_mappings[$date_key][$date_time_key]['manual_eventbrite_id']) && 
+                    !empty($this->all_mappings[$date_key][$date_time_key]['manual_eventbrite_id'])) {
+                    BRCC_Helpers::log_info("Found exact date/time match for ticket ID (manual_eventbrite_id): Product ID {$product_id}, Date: {$date}, Time: {$time}");
+                    return $this->all_mappings[$date_key][$date_time_key]['manual_eventbrite_id'];
+                } elseif (isset($this->all_mappings[$date_key][$date_time_key]['eventbrite_ticket_id'])) { // Fallback check
+                    BRCC_Helpers::log_info("Found exact date/time match for ticket ID (fallback eventbrite_ticket_id): Product ID {$product_id}, Date: {$date}, Time: {$time}");
                     return $this->all_mappings[$date_key][$date_time_key]['eventbrite_ticket_id'];
                 }
                 
                 // Try matching date with time buffer if specific time provided
                 if ($time) {
-                     foreach ($this->all_mappings[$date_key] as $mapped_date_time => $specific_mapping) {
-                         if (strpos($mapped_date_time, $date . '_') === 0) { // Key starts with the date
-                             $stored_time = substr($mapped_date_time, strlen($date) + 1);
-                             if (isset($specific_mapping['eventbrite_ticket_id']) && BRCC_Helpers::is_time_close($time, $stored_time)) {
-                                 BRCC_Helpers::log_info("Found date+time (buffer) match for ticket ID: Product ID {$product_id}, Date: {$date}, Time: {$time}");
-                                 return $specific_mapping['eventbrite_ticket_id'];
-                             }
-                         }
-                     }
+                    foreach ($this->all_mappings[$date_key] as $mapped_date_time => $specific_mapping) {
+                        if (strpos($mapped_date_time, $date . '_') === 0) { // Key starts with the date
+                            $stored_time = substr($mapped_date_time, strlen($date) + 1);
+                            // Prioritize manual_eventbrite_id
+                            $ticket_id_to_return = null;
+                            if (isset($specific_mapping['manual_eventbrite_id']) && !empty($specific_mapping['manual_eventbrite_id'])) {
+                                $ticket_id_to_return = $specific_mapping['manual_eventbrite_id'];
+                            } elseif (isset($specific_mapping['eventbrite_ticket_id'])) { // Fallback
+                                $ticket_id_to_return = $specific_mapping['eventbrite_ticket_id'];
+                            }
+
+                            if ($ticket_id_to_return && BRCC_Helpers::is_time_close($time, $stored_time)) {
+                                BRCC_Helpers::log_info("Found date+time (buffer) match for ticket ID: Product ID {$product_id}, Date: {$date}, Time: {$time}");
+                                return $ticket_id_to_return;
+                            }
+                        }
+                    }
                 }
                 
                 // Fallback: Check if there's an 'any' time entry for the date
-                 if (isset($this->all_mappings[$date_key][$date . '_any']['eventbrite_ticket_id'])) {
-                     BRCC_Helpers::log_info("Found 'any' time match for ticket ID: Product ID {$product_id}, Date: {$date}");
-                     return $this->all_mappings[$date_key][$date . '_any']['eventbrite_ticket_id'];
-                 }
+                // Prioritize manual_eventbrite_id
+                if (isset($this->all_mappings[$date_key][$date . '_any']['manual_eventbrite_id']) && 
+                    !empty($this->all_mappings[$date_key][$date . '_any']['manual_eventbrite_id'])) {
+                    BRCC_Helpers::log_info("Found 'any' time match for ticket ID (manual_eventbrite_id): Product ID {$product_id}, Date: {$date}");
+                    return $this->all_mappings[$date_key][$date . '_any']['manual_eventbrite_id'];
+                } elseif (isset($this->all_mappings[$date_key][$date . '_any']['eventbrite_ticket_id'])) { // Fallback
+                    BRCC_Helpers::log_info("Found 'any' time match for ticket ID (fallback eventbrite_ticket_id): Product ID {$product_id}, Date: {$date}");
+                    return $this->all_mappings[$date_key][$date . '_any']['eventbrite_ticket_id'];
+                }
             }
         }
 
         // 2. Check general product mapping
-        if (isset($this->all_mappings[$product_id]['eventbrite_ticket_id'])) {
-            BRCC_Helpers::log_info("Found general mapping for ticket ID: Product ID {$product_id}");
+        // Prioritize manual_eventbrite_id
+        if (isset($this->all_mappings[$product_id]['manual_eventbrite_id']) && 
+            !empty($this->all_mappings[$product_id]['manual_eventbrite_id'])) {
+            BRCC_Helpers::log_info("Found general mapping for ticket ID (manual_eventbrite_id): Product ID {$product_id}");
+            return $this->all_mappings[$product_id]['manual_eventbrite_id'];
+        } elseif (isset($this->all_mappings[$product_id]['eventbrite_ticket_id'])) { // Fallback
+            BRCC_Helpers::log_info("Found general mapping for ticket ID (fallback eventbrite_ticket_id): Product ID {$product_id}");
             return $this->all_mappings[$product_id]['eventbrite_ticket_id'];
         }
 
@@ -255,62 +286,62 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
      */
     private function load_mappings() {
         if (!isset($this->all_mappings)) {
-             $this->all_mappings = $this->product_mappings->get_all_mappings();
+            $this->all_mappings = $this->product_mappings->get_all_mappings();
         }
     }
-/**
- * Process Eventbrite order details from webhook
- *
- * @param array $order_details The complete order details from Eventbrite API
- * @return boolean Success status
- */
 
-public function process_eventbrite_order($order_details, $request) {
-    if (empty($order_details) || !isset($order_details['event'])) {
-        BRCC_Helpers::log_error('process_eventbrite_order: Invalid or missing event data in order details.', ['order_details' => $order_details, 'request_body' => $request->get_body()]);
-        return false;
-    }
-
-    // Extract event data from order details
-    $event_id = $order_details['event']['id'] ?? null;
-
-    // Extract date and time from the event
-    $start_time = $order_details['event']['start']['local'] ?? null;
-    $date = null;
-    $time = null;
-
-    if ($start_time) {
-        try {
-            $date_time = new DateTime($start_time);
-            $date = $date_time->format('Y-m-d');
-            $time = $date_time->format('H:i');
-        } catch (Exception $e) {
-            BRCC_Helpers::log_error('process_eventbrite_order: Error formatting date/time: ' . $e->getMessage(), ['order_details' => $order_details]);
+    /**
+     * Process Eventbrite order details from webhook
+     *
+     * @param array $order_details The complete order details from Eventbrite API
+     * @param WP_REST_Request $request The request object
+     * @return boolean Success status
+     */
+    public function process_eventbrite_order($order_details, $request) {
+        if (empty($order_details) || !isset($order_details['event'])) {
+            BRCC_Helpers::log_error('process_eventbrite_order: Invalid or missing event data in order details.', ['order_details' => $order_details, 'request_body' => $request->get_body()]);
             return false;
         }
-    }
 
-    BRCC_Helpers::log_info("process_eventbrite_order: Processing event ID: {$event_id}, Date: {$date}, Time: {$time}");
+        // Extract event data from order details
+        $event_id = $order_details['event']['id'] ?? null;
 
-    
-    // Find product using our database mapping (ignoring ticket class ID)
-    $product_id = $this->product_mappings->find_product_id_for_event(null, $date, $time, $event_id);
+        // Extract date and time from the event
+        $start_time = $order_details['event']['start']['local'] ?? null;
+        $date = null;
+        $time = null;
 
-    if ($product_id) {
-        // Process the order with the found product ID
-        $result = $this->process_order_for_product($product_id, $order_details);
-        if ($result) {
-            BRCC_Helpers::log_info("process_eventbrite_order: Successfully processed order for product ID: {$product_id}");
-            return true;
+        if ($start_time) {
+            try {
+                $date_time = new DateTime($start_time);
+                $date = $date_time->format('Y-m-d');
+                $time = $date_time->format('H:i');
+            } catch (Exception $e) {
+                BRCC_Helpers::log_error('process_eventbrite_order: Error formatting date/time: ' . $e->getMessage(), ['order_details' => $order_details]);
+                return false;
+            }
+        }
+
+        BRCC_Helpers::log_info("process_eventbrite_order: Processing event ID: {$event_id}, Date: {$date}, Time: {$time}");
+
+        // Find product using our database mapping (ignoring ticket class ID)
+        $product_id = $this->product_mappings->find_product_id_for_event(null, $date, $time, $event_id);
+
+        if ($product_id) {
+            // Process the order with the found product ID
+            $result = $this->process_order_for_product($product_id, $order_details);
+            if ($result) {
+                BRCC_Helpers::log_info("process_eventbrite_order: Successfully processed order for product ID: {$product_id}");
+                return true;
+            } else {
+                BRCC_Helpers::log_error("process_eventbrite_order: Failed to process order for product ID: {$product_id}", ['order_details' => $order_details]);
+                return false;
+            }
         } else {
-            BRCC_Helpers::log_error("process_eventbrite_order: Failed to process order for product ID: {$product_id}", ['order_details' => $order_details]);
+            BRCC_Helpers::log_error("process_eventbrite_order: Could not find matching product for event. Event ID: {$event_id}, Date: {$date}, Time: {$time}");
             return false;
         }
-    } else {
-        BRCC_Helpers::log_error("process_eventbrite_order: Could not find matching product for event. Event ID: {$event_id}, Date: {$date}, Time: {$time}");
-        return false;
     }
-} // <-- Add this closing brace for process_eventbrite_order
 
     /**
      * Process the order for a specific product ID after it's been matched.
@@ -330,8 +361,8 @@ public function process_eventbrite_order($order_details, $request) {
 
         // Ensure sales tracker is available
         if (!$this->sales_tracker) {
-             BRCC_Helpers::log_error('process_order_for_product: Sales Tracker not initialized.');
-             return false;
+            BRCC_Helpers::log_error('process_order_for_product: Sales Tracker not initialized.');
+            return false;
         }
 
         // --- Extract Data ---
@@ -348,33 +379,31 @@ public function process_eventbrite_order($order_details, $request) {
             foreach ($order_details['attendees'] as $attendee) {
                 // Ensure the attendee belongs to the event we matched (though usually the order is for one event)
                 if (isset($attendee['event_id']) && $attendee['event_id'] == $order_details['event_id']) {
-                     $quantity += $attendee['quantity'] ?? 0;
+                    $quantity += $attendee['quantity'] ?? 0;
                 }
             }
         }
-         if ($quantity === 0) {
-             // Fallback or default if attendees structure is unexpected or quantity is zero
-             $quantity = 1; // Default to 1 if calculation fails? Or log an error?
-             BRCC_Helpers::log_warning('process_order_for_product: Could not determine quantity from attendees, defaulting to 1.', ['attendees' => $order_details['attendees'] ?? null]);
-         }
-
+        if ($quantity === 0) {
+            // Fallback or default if attendees structure is unexpected or quantity is zero
+            $quantity = 1; // Default to 1 if calculation fails? Or log an error?
+            BRCC_Helpers::log_warning('process_order_for_product: Could not determine quantity from attendees, defaulting to 1.', ['attendees' => $order_details['attendees'] ?? null]);
+        }
 
         // Extract Event Details for richer logging
         $event_details_for_log = [];
         if (isset($order_details['event'])) {
-             $event_details_for_log['name'] = $order_details['event']['name']['text'] ?? 'N/A';
-             $event_details_for_log['id'] = $order_details['event']['id'] ?? 'N/A';
-             if (isset($order_details['event']['start']['local'])) {
-                 try {
-                     $dt = new DateTime($order_details['event']['start']['local']);
-                     $event_details_for_log['date'] = $dt->format('Y-m-d');
-                     $event_details_for_log['time'] = $dt->format('H:i');
-                 } catch (Exception $e) {
-                     // Ignore formatting errors for logging
-                 }
-             }
+            $event_details_for_log['name'] = $order_details['event']['name']['text'] ?? 'N/A';
+            $event_details_for_log['id'] = $order_details['event']['id'] ?? 'N/A';
+            if (isset($order_details['event']['start']['local'])) {
+                try {
+                    $dt = new DateTime($order_details['event']['start']['local']);
+                    $event_details_for_log['date'] = $dt->format('Y-m-d');
+                    $event_details_for_log['time'] = $dt->format('H:i');
+                } catch (Exception $e) {
+                    // Ignore formatting errors for logging
+                }
+            }
         }
-
 
         // --- Record Sale ---
         try {
@@ -403,7 +432,7 @@ public function process_eventbrite_order($order_details, $request) {
                 );
                 BRCC_Helpers::log_operation('Eventbrite Webhook', 'Sale Recorded', $log_details);
 
-// Immediately update WooCommerce stock
+                // Immediately update WooCommerce stock
                 $stock_update_note = sprintf('Eventbrite Order #%s', $source_order_id);
                 $stock_updated = $this->sales_tracker->update_woocommerce_stock($product_id, $quantity, $stock_update_note);
                 if ($stock_updated) {
@@ -434,12 +463,12 @@ public function process_eventbrite_order($order_details, $request) {
         }
     }
 
-     /**
-      * Fetch full order details from Eventbrite API URL provided by webhook.
-      *
-      * @param string $api_url The API URL for the order.
-      * @return array|WP_Error Order details array or WP_Error on failure.
-      */
+    /**
+     * Fetch full order details from Eventbrite API URL provided by webhook.
+     *
+     * @param string $api_url The API URL for the order.
+     * @return array|WP_Error Order details array or WP_Error on failure.
+     */
     private function fetch_eventbrite_order_details($api_url) {
         if (empty($this->api_token)) {
             return new WP_Error('missing_token', __('Eventbrite API token is not configured.', 'brcc-inventory-tracker'));
@@ -463,16 +492,16 @@ public function process_eventbrite_order($order_details, $request) {
 
         $status_code = wp_remote_retrieve_response_code($response);
         $body = json_decode(wp_remote_retrieve_body($response), true);
-        BRCC_Helpers::log_debug('fetch_eventbrite_order_details: API Response', ['status_code' => $status_code, 'body' => $body ]);
+        BRCC_Helpers::log_debug('fetch_eventbrite_order_details: API Response', ['status_code' => $status_code, 'body' => $body]);
 
         if ($status_code !== 200 || isset($body['error'])) {
-             $error_message = isset($body['error_description']) ? $body['error_description'] : __('Unknown Eventbrite API error fetching order details.', 'brcc-inventory-tracker');
-             if ($status_code !== 200) {
-                  $error_message = sprintf(__('Eventbrite API returned status %d fetching order details.', 'brcc-inventory-tracker'), $status_code);
-             }
-             $error_message .= sprintf(' (URL: %s, Status Code: %d)', esc_url($api_url), $status_code);
-             return new WP_Error('eventbrite_api_error', $error_message, array('status' => $status_code, 'response_body' => $body));
-       }
+            $error_message = isset($body['error_description']) ? $body['error_description'] : __('Unknown Eventbrite API error fetching order details.', 'brcc-inventory-tracker');
+            if ($status_code !== 200) {
+                $error_message = sprintf(__('Eventbrite API returned status %d fetching order details.', 'brcc-inventory-tracker'), $status_code);
+            }
+            $error_message .= sprintf(' (URL: %s, Status Code: %d)', esc_url($api_url), $status_code);
+            return new WP_Error('eventbrite_api_error', $error_message, array('status' => $status_code, 'response_body' => $body));
+        }
 
         return $body;
     }
@@ -499,9 +528,9 @@ public function process_eventbrite_order($order_details, $request) {
         // Check if it's an order placement action
         $action = $payload['config']['action'];
         if ($action !== 'order.placed') {
-             BRCC_Helpers::log_info('process_eventbrite_webhook: Ignoring non-order.placed action.', ['action' => $action]);
-             // Return 200 OK even if we ignore it, as Eventbrite expects a success response.
-             return new WP_REST_Response(array('message' => 'Action ignored'), 200);
+            BRCC_Helpers::log_info('process_eventbrite_webhook: Ignoring non-order.placed action.', ['action' => $action]);
+            // Return 200 OK even if we ignore it, as Eventbrite expects a success response.
+            return new WP_REST_Response(array('message' => 'Action ignored'), 200);
         }
 
         $api_url = $payload['api_url'];
@@ -520,9 +549,8 @@ public function process_eventbrite_order($order_details, $request) {
             return new WP_REST_Response(array('message' => 'Error fetching order details: ' . $order_details->get_error_message()), 500);
         }
 
-// Process the fetched order details using the dedicated function
-$processing_result = $this->process_eventbrite_order($order_details, $request);
-
+        // Process the fetched order details using the dedicated function
+        $processing_result = $this->process_eventbrite_order($order_details, $request);
 
         if ($processing_result) {
             BRCC_Helpers::log_info('process_eventbrite_webhook: Successfully processed webhook.', ['api_url' => $api_url]);
@@ -534,116 +562,170 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
         }
         
         BRCC_Helpers::log_info('--- END process_eventbrite_webhook ---');
+        }
+        
+    /**
+ * Get all events from Eventbrite for organization
+ * 
+ * @param string $status Event status ('live', 'draft', 'started', 'ended', 'completed', 'canceled')
+ * @param bool $include_series Whether to include series parent events
+ * @return array|WP_Error Array of events or WP_Error on failure
+ */
+public function get_organization_events($status = 'live', $include_series = true) {
+    if (empty($this->api_token)) {
+        return new WP_Error('missing_token', __('Eventbrite API token is not configured.', 'brcc-inventory-tracker'));
     }
 
-    /**
-     * Get all events from Eventbrite for organization
-     * 
-     * @param string $status Event status ('live', 'draft', 'started', 'ended', 'completed', 'canceled')
-     * @param int $page_size Number of events per page
-     * @param bool $include_series Whether to include series parent events
-     * @return array|WP_Error Array of events or WP_Error on failure
-     */
-    public function get_organization_events($status = 'live', $include_series = true) {
-        if (empty($this->api_token)) {
-            return new WP_Error('missing_token', __('Eventbrite API token is not configured.', 'brcc-inventory-tracker'));
-        }
+    // --- Caching Implementation ---
+    $cache_key = 'brcc_eb_org_events_' . md5(serialize([$status, $include_series]));
+    $cached_events = get_transient($cache_key);
 
-        // --- Caching Implementation ---
-        $cache_key = 'brcc_eb_org_events_' . md5(serialize([$status, $include_series])); // Key based on parameters
-        $cached_events = get_transient($cache_key);
+    if (false !== $cached_events) {
+        BRCC_Helpers::log_info('get_organization_events: Returning cached events. Count: ' . 
+            (is_array($cached_events) ? count($cached_events) : 'N/A'));
+        return $cached_events;
+    }
+    
+    BRCC_Helpers::log_info('get_organization_events: No valid cache found, fetching from API.');
+    // --- End Caching Check ---
 
-        if (false !== $cached_events) {
-            BRCC_Helpers::log_info('get_organization_events: Returning cached events.', ['status' => $status, 'include_series' => $include_series]);
-            return $cached_events;
-        }
-        BRCC_Helpers::log_info('get_organization_events: No valid cache found, fetching from API.', ['status' => $status, 'include_series' => $include_series]);
-        // --- End Caching Check ---
-
+    // Get organization ID - prioritize settings value
+    $settings = get_option('brcc_api_settings');
+    $organization_id = isset($settings['eventbrite_org_id']) ? trim($settings['eventbrite_org_id']) : '';
+    
+    if (empty($organization_id)) {
+        // Only try auto-detection if not in settings
+        BRCC_Helpers::log_info('get_organization_events: No Org ID in settings, attempting API detection');
         $organization_id = $this->get_organization_id();
+        
         if (is_wp_error($organization_id)) {
-            BRCC_Helpers::log_error('get_organization_events: Failed to get Organization ID.', $organization_id);
+            BRCC_Helpers::log_error('get_organization_events: Failed to get Organization ID', [
+                'error' => $organization_id->get_error_message()
+            ]);
             return $organization_id;
         }
-
-        $all_events = array();
-        $continuation = null;
-        $page_number = 1;
-        $page_size = 100; // Use a larger page size for fewer requests
-
-        BRCC_Helpers::log_info('get_organization_events: Starting fetch loop.', ['status' => $status, 'include_series' => $include_series]);
-
-        do {
-            $url = $this->api_url . '/organizations/' . $organization_id . '/events/';
-            $params = array(
-                'status' => $status,
-                'page_size' => $page_size,
-                'expand' => 'ticket_classes' // Expand ticket classes to get capacity info
-            );
-            
-            if ($continuation) {
-                $params['continuation'] = $continuation;
-            }
-            
-            $url = add_query_arg($params, $url);
-            
-            BRCC_Helpers::log_info('get_organization_events: Fetching page ' . $page_number, ['url' => $url]);
-
-            $response = wp_remote_get($url, array(
-                'headers' => array(
-                    'Authorization' => 'Bearer ' . $this->api_token,
-                    'Content-Type' => 'application/json',
-                ),
-                'timeout' => 30 // Increased timeout
-            ));
-
-            if (is_wp_error($response)) {
-                BRCC_Helpers::log_error('get_organization_events: WP Error fetching events.', $response);
-                return $response;
-            }
-
-            $status_code = wp_remote_retrieve_response_code($response);
-            $body = json_decode(wp_remote_retrieve_body($response), true);
-
-            if ($status_code !== 200 || isset($body['error'])) {
-                 $error_message = isset($body['error_description']) ? $body['error_description'] : __('Unknown Eventbrite API error fetching events.', 'brcc-inventory-tracker');
-                 if ($status_code !== 200) {
-                      $error_message = sprintf(__('Eventbrite API returned status %d fetching events.', 'brcc-inventory-tracker'), $status_code);
-                 }
-                 BRCC_Helpers::log_error('get_organization_events: API Error', array(
-                     'status_code' => $status_code,
-                     'error_message' => $error_message,
-                     'response_body' => $body
-                 ));
-                 return new WP_Error('eventbrite_api_error', $error_message, array('status' => $status_code, 'response_body' => $body));
-            }
-
-            if (isset($body['events']) && is_array($body['events'])) {
-                foreach ($body['events'] as $event) {
-                    // Filter out series parents if not requested
-                    if (!$include_series && isset($event['series_id']) && $event['series_id']) {
-                        continue;
-                    }
-                    $all_events[] = $event;
-                }
-            }
-
-            // Check for continuation token
-            $continuation = isset($body['pagination']['continuation']) ? $body['pagination']['continuation'] : null;
-            $page_number++;
-
-        } while ($continuation && $page_number < 10); // Add a safety limit (e.g., 10 pages)
-
-        BRCC_Helpers::log_info('get_organization_events: Finished fetch loop. Total events fetched: ' . count($all_events));
-
-        // --- Caching Implementation ---
-        set_transient($cache_key, $all_events, HOUR_IN_SECONDS); // Cache for 1 hour
-        BRCC_Helpers::log_info('get_organization_events: Stored fetched events in cache.', ['cache_key' => $cache_key]);
-        // --- End Caching ---
-
-        return $all_events;
+    } else {
+        BRCC_Helpers::log_info('get_organization_events: Using Organization ID from settings: ' . $organization_id);
     }
 
+    // Final verification before API call
+    if (empty($organization_id)) {
+        BRCC_Helpers::log_error('get_organization_events: Organization ID is empty after all checks');
+        return new WP_Error(
+            'org_id_unavailable', 
+            __('Could not determine Eventbrite Organization ID from settings or API.', 'brcc-inventory-tracker')
+        );
+    }
+
+    $all_events = array();
+    $continuation = null;
+    $page_number = 1;
+    $page_size = 100; // Use a larger page size for fewer requests
+
+    BRCC_Helpers::log_info('get_organization_events: Starting fetch loop with Org ID: ' . $organization_id);
+
+    do {
+        $url = $this->api_url . '/organizations/' . $organization_id . '/events/';
+        $params = array(
+            'status' => $status,
+            'page_size' => $page_size,
+            'expand' => 'ticket_classes' // Expand ticket classes to get capacity info
+        );
+        
+        if ($continuation) {
+            $params['continuation'] = $continuation;
+        }
+        
+        $url = add_query_arg($params, $url);
+        
+        BRCC_Helpers::log_info('get_organization_events: Fetching page ' . $page_number, ['url' => $url]);
+
+        $response = wp_remote_get($url, array(
+            'headers' => array(
+                'Authorization' => 'Bearer ' . $this->api_token,
+                'Content-Type' => 'application/json',
+            ),
+            'timeout' => 30 // Increased timeout
+        ));
+
+        if (is_wp_error($response)) {
+            BRCC_Helpers::log_error('get_organization_events: WP Error fetching events', [
+                'error' => $response->get_error_message()
+            ]);
+            return $response;
+        }
+
+        $status_code = wp_remote_retrieve_response_code($response);
+        $body = json_decode(wp_remote_retrieve_body($response), true);
+
+        if ($status_code !== 200 || isset($body['error'])) {
+            $error_message = isset($body['error_description']) ? 
+                $body['error_description'] : __('Unknown Eventbrite API error fetching events.', 'brcc-inventory-tracker');
+                
+            if ($status_code !== 200) {
+                $error_message = sprintf(__('Eventbrite API returned status %d fetching events.', 'brcc-inventory-tracker'), $status_code);
+            }
+            
+            BRCC_Helpers::log_error('get_organization_events: API Error', [
+                'status_code' => $status_code,
+                'error_message' => $error_message,
+                'response_body' => $body
+            ]);
+            
+            return new WP_Error('eventbrite_api_error', $error_message, [
+                'status' => $status_code, 
+                'response_body' => $body
+            ]);
+        }
+
+        if (isset($body['events']) && is_array($body['events'])) {
+            foreach ($body['events'] as $event) {
+                // Filter out series parents if not requested
+                if (!$include_series && isset($event['is_series_parent']) && $event['is_series_parent']) {
+                    continue;
+                }
+                
+                // Format the event for dropdown display
+                if (isset($event['id']) && isset($event['name']['text'])) {
+                    $event_name = htmlspecialchars_decode($event['name']['text'], ENT_QUOTES);
+                    
+                    // Include start date/time if available
+                    $date_time_str = '';
+                    if (isset($event['start']['local'])) {
+                        $start_time = strtotime($event['start']['local']);
+                        $date_format = get_option('date_format', 'M j, Y');
+                        $time_format = get_option('time_format', 'g:i A');
+                        $date_time_str = ' - ' . date_i18n($date_format . ' ' . $time_format, $start_time);
+                    }
+                    
+                    // Format as: Event Name (ID: 12345) - Date/Time
+                    $formatted_event = sprintf('%s (ID: %s)%s', 
+                        $event_name, 
+                        $event['id'],
+                        $date_time_str
+                    );
+                    
+                    // Store formatted event in array using ID as key
+                    $all_events[$event['id']] = $formatted_event;
+                }
+            }
+        }
+
+        // Check for continuation token
+        $continuation = isset($body['pagination']['continuation']) ? $body['pagination']['continuation'] : null;
+        $page_number++;
+
+    } while ($continuation && $page_number < 10); // Add a safety limit (e.g., 10 pages)
+
+    BRCC_Helpers::log_info('get_organization_events: Finished fetch loop. Total events: ' . count($all_events));
+
+    // --- Caching Implementation ---
+    set_transient($cache_key, $all_events, HOUR_IN_SECONDS); // Cache for 1 hour
+    BRCC_Helpers::log_info('get_organization_events: Stored fetched events in cache.');
+    // --- End Caching ---
+
+    return $all_events;
+}
     /**
      * Get events belonging to a specific series ID
      * 
@@ -743,39 +825,61 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
         return $all_events;
     }
 
-    /**
-     * Get Eventbrite Organization ID
-     */
-    public function get_organization_id() {
-        // --- Caching Implementation ---
-        $cache_key = 'brcc_eb_org_id_' . md5($this->api_token); // Key based on token
-        $cached_org_id = get_transient($cache_key);
+   /**
+ * Get Eventbrite Organization ID
+ */
+public function get_organization_id() {
+    // First, check settings directly
+    $settings = get_option('brcc_api_settings');
+    $organization_id_from_settings = isset($settings['eventbrite_org_id']) ? trim($settings['eventbrite_org_id']) : '';
+    
+    if (!empty($organization_id_from_settings)) {
+        BRCC_Helpers::log_info('get_organization_id: Using Organization ID from settings: ' . $organization_id_from_settings);
+        return $organization_id_from_settings;
+    }
+    
+    // --- Caching Implementation (only for API detection) ---
+    $cache_key = 'brcc_eb_org_id_' . md5($this->api_token);
+    $cached_org_id = get_transient($cache_key);
 
-        if (false !== $cached_org_id) {
-            BRCC_Helpers::log_info('get_organization_id: Returning cached Organization ID.');
-            return $cached_org_id;
-        }
-        BRCC_Helpers::log_info('get_organization_id: No valid cache found, fetching from API.');
-        // --- End Caching Check ---
-
-        $user_info = $this->get_user_info();
-        
-        if (is_wp_error($user_info)) {
-            return $user_info;
-        }
-        
+    if (false !== $cached_org_id) {
+        BRCC_Helpers::log_info('get_organization_id: Returning cached Organization ID from API detection.');
+        return $cached_org_id;
+    }
+    
+    BRCC_Helpers::log_info('get_organization_id: No ID in settings or cache, attempting API detection.');
+    
+    // Try API detection as last resort
+    $user_info = $this->get_user_info();
+    
+    if (is_wp_error($user_info)) {
+        BRCC_Helpers::log_error('get_organization_id: API error getting user info: ' . $user_info->get_error_message());
+        return $user_info;
+    }
+    
+    if (isset($user_info['organizations']) && is_array($user_info['organizations']) && !empty($user_info['organizations'])) {
         if (isset($user_info['organizations'][0]['id'])) {
             $org_id = $user_info['organizations'][0]['id'];
-            // --- Caching Implementation ---
-            set_transient($cache_key, $org_id, DAY_IN_SECONDS); // Cache for 1 day
-            BRCC_Helpers::log_info('get_organization_id: Stored fetched Organization ID in cache.', ['cache_key' => $cache_key]);
-            // --- End Caching ---
+            BRCC_Helpers::log_info('get_organization_id: Successfully detected Organization ID via API: ' . $org_id);
+            
+            // Cache the detected ID
+            set_transient($cache_key, $org_id, HOUR_IN_SECONDS * 12); // Cache for 12 hours
+            
             return $org_id;
         }
-        
-        return new WP_Error('org_id_not_found', __('Could not determine Eventbrite Organization ID.', 'brcc-inventory-tracker'));
     }
-
+    
+    // If we get here, both settings check and API detection failed
+    BRCC_Helpers::log_error('get_organization_id: Could not determine Organization ID', [
+        'settings_value' => $organization_id_from_settings,
+        'api_response' => $user_info
+    ]);
+    
+    return new WP_Error(
+        'org_id_not_found', 
+        __('Could not determine Eventbrite Organization ID. Please enter it manually in settings.', 'brcc-inventory-tracker')
+    );
+}
     /**
      * Get Eventbrite User Info (includes organization ID)
      */
@@ -912,8 +1016,15 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
      * @param string|null $time Time in H:i format (optional)
      * @param string|null $product_sku Product SKU (optional, for better matching)
      * @return array Array of suggestions (event_id, event_name, ticket_id, ticket_name, capacity, start_time)
+     * Suggests potential Eventbrite Ticket Class IDs based on product details, date, and time.
+     *
+     * @param WC_Product $product WooCommerce product object.
+     * @param string|null $date Target date (Y-m-d).
+     * @param string|null $time Target time (H:i).
+     * @param string|null $product_sku Product SKU for matching.
+     * @return array|WP_Error Array of suggestions or WP_Error on failure.
      */
-    public function suggest_eventbrite_ids_for_product($product, $date, $time = null, $product_sku = null) { // Added $product_sku
+    public function suggest_eventbrite_ticket_class_ids_for_product($product, $date, $time = null, $product_sku = null) { // Renamed function
         if (!$product) {
             return array();
         }
@@ -924,14 +1035,16 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
             $product_sku = $product->get_sku();
         }
         
-        BRCC_Helpers::log_info('suggest_eventbrite_ids_for_product: Starting suggestion process.', [
+        // Renamed function in log message
+        BRCC_Helpers::log_info('suggest_eventbrite_ticket_class_ids_for_product: Starting suggestion process.', [
             'product_id' => $product_id, 'product_name' => $product_name, 'sku' => $product_sku, 'date' => $date, 'time' => $time
         ]);
 
         // 1. Get all 'live' events for the organization (cached)
         $live_events = $this->get_organization_events('live');
         if (is_wp_error($live_events)) {
-            BRCC_Helpers::log_error('suggest_eventbrite_ids_for_product: Error fetching live events.', $live_events);
+            // Renamed function in log message
+            BRCC_Helpers::log_error('suggest_eventbrite_ticket_class_ids_for_product: Error fetching live events.', $live_events);
             return array();
         }
         
@@ -941,12 +1054,14 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
             try {
                 $target_datetime = new DateTime($date . ' ' . ($time ? $time : '00:00:00'), wp_timezone());
             } catch (Exception $e) {
-                BRCC_Helpers::log_warning('suggest_eventbrite_ids_for_product: Invalid date/time provided.', ['date' => $date, 'time' => $time]);
+                // Renamed function in log message
+                BRCC_Helpers::log_warning('suggest_eventbrite_ticket_class_ids_for_product: Invalid date/time provided.', ['date' => $date, 'time' => $time]);
                 return array(); // Invalid date/time format
             }
         }
 
-        BRCC_Helpers::log_info('suggest_eventbrite_ids_for_product: Processing ' . count($live_events) . ' live events.');
+        // Renamed function in log message
+        BRCC_Helpers::log_info('suggest_eventbrite_ticket_class_ids_for_product: Processing ' . count($live_events) . ' live events.');
 
         foreach ($live_events as $event) {
             $event_id = $event['id'];
@@ -1003,7 +1118,8 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
 
             // --- Process Ticket Classes if Match Score is High Enough ---
             if ($match_score > 0 && isset($event['ticket_classes']) && is_array($event['ticket_classes'])) {
-                 BRCC_Helpers::log_debug('suggest_eventbrite_ids_for_product: Potential match found.', [
+                 // Renamed function in log message
+                 BRCC_Helpers::log_debug('suggest_eventbrite_ticket_class_ids_for_product: Potential match found.', [
                      'event_id' => $event_id, 'event_name' => $event_name, 'score' => $match_score, 'reasons' => $match_reasons
                  ]);
 
@@ -1038,7 +1154,8 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
             return $b['match_score'] <=> $a['match_score'];
         });
 
-        BRCC_Helpers::log_info('suggest_eventbrite_ids_for_product: Found ' . count($suggestions) . ' suggestions.');
+        // Renamed function in log message
+        BRCC_Helpers::log_info('suggest_eventbrite_ticket_class_ids_for_product: Found ' . count($suggestions) . ' suggestions.');
         // Limit the number of suggestions returned
         return array_slice($suggestions, 0, 10); 
     }
@@ -1542,8 +1659,12 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
      * 
      * @param bool $manual_daily_sync Flag indicating if this is the manual daily sync run.
      */
-    public function sync_eventbrite_tickets($manual_daily_sync = false) {
-        BRCC_Helpers::log_info('--- START sync_eventbrite_tickets ---', ['manual_daily_sync' => $manual_daily_sync]);
+    public function sync_eventbrite_tickets($manual_daily_sync = false, $specific_product_id = 0, $specific_date = '') {
+        BRCC_Helpers::log_info('--- START sync_eventbrite_tickets ---', [
+            'manual_daily_sync' => $manual_daily_sync,
+            'specific_product_id' => $specific_product_id,
+            'specific_date' => $specific_date
+        ]);
         
         // Get all product mappings
         $this->load_mappings();
@@ -1557,17 +1678,27 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
 
         $sales_tracker = new BRCC_Sales_Tracker(); // Instantiate sales tracker
 
-        // Iterate through each mapped product
+        // Iterate through each mapped product, filtering if specific product/date requested
         foreach ($mappings as $product_id_key => $mapping_data) {
             
             // Handle date-specific mappings
             if (strpos($product_id_key, '_dates') !== false) {
                 $wc_product_id = (int) str_replace('_dates', '', $product_id_key);
                 
+                // Skip if specific product requested and this isn't it
+                if ($specific_product_id > 0 && $wc_product_id != $specific_product_id) {
+                    continue;
+                }
+                
                 foreach ($mapping_data as $date_time_key => $specific_mapping) {
                     if (isset($specific_mapping['eventbrite_event_id'])) {
                         $event_id = $specific_mapping['eventbrite_event_id'];
                         list($date, $time) = explode('_', $date_time_key); // Extract date/time from key
+                        
+                        // Skip if specific date requested and this isn't it
+                        if (!empty($specific_date) && $date != $specific_date) {
+                            continue;
+                        }
                         
                         BRCC_Helpers::log_info('sync_eventbrite_tickets: Processing date-specific mapping.', [
                             'wc_product_id' => $wc_product_id, 'event_id' => $event_id, 'date' => $date, 'time' => $time
@@ -1576,36 +1707,92 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
                         // Fetch attendees for this specific event
                         $attendees_data = $this->get_event_attendees($event_id);
                         
-                        if (!is_wp_error($attendees_data) && isset($attendees_data['attendees'])) {
-                            $quantity_sold = count($attendees_data['attendees']); // Simple count for now
-                            
-                            BRCC_Helpers::log_info('sync_eventbrite_tickets: Fetched attendees.', [
-                                'event_id' => $event_id, 'attendee_count' => $quantity_sold
+                        // Get the ticket ID for this event/date/time
+                        $ticket_id = $this->get_eventbrite_ticket_id_for_product($wc_product_id, $date, $time);
+                        
+                        if (!$ticket_id) {
+                            BRCC_Helpers::log_warning('sync_eventbrite_tickets: No ticket ID found for product.', [
+                                'wc_product_id' => $wc_product_id, 'event_id' => $event_id, 'date' => $date, 'time' => $time
                             ]);
-
-                            // Update WooCommerce stock based on attendee count
-                            // Note: This overwrites current stock, might need adjustment based on desired logic
-                            // $sales_tracker->update_woocommerce_stock($wc_product_id, $quantity_sold, 'Eventbrite Sync (Attendee Count)');
-                            // TODO: Re-evaluate stock update logic. Should it SET stock or DECREMENT?
-                            // For now, let's assume we need to record the sale difference if not already recorded by webhook.
-                            // This part needs careful consideration of how webhooks and sync interact.
-                            // Perhaps just log the discrepancy for now?
-                             BRCC_Helpers::log_warning('sync_eventbrite_tickets: Attendee count based stock update logic needs review.', [
-                                 'wc_product_id' => $wc_product_id, 'event_id' => $event_id, 'attendee_count' => $quantity_sold
-                             ]);
-
+                            continue;
+                        }
+                        
+                        // Get current WooCommerce stock
+                        $product = wc_get_product($wc_product_id);
+                        if (!$product || !$product->managing_stock()) {
+                            BRCC_Helpers::log_warning('sync_eventbrite_tickets: Product not found or not managing stock.', [
+                                'wc_product_id' => $wc_product_id
+                            ]);
+                            continue;
+                        }
+                        
+                        $wc_stock = $product->get_stock_quantity();
+                        
+                        // Get current Eventbrite ticket capacity
+                        $ticket_details = $this->get_eventbrite_ticket($ticket_id);
+                        if (is_wp_error($ticket_details) || !isset($ticket_details['capacity'])) {
+                            BRCC_Helpers::log_error('sync_eventbrite_tickets: Failed to get ticket details.', [
+                                'ticket_id' => $ticket_id,
+                                'error' => is_wp_error($ticket_details) ? $ticket_details->get_error_message() : 'No capacity found'
+                            ]);
+                            continue;
+                        }
+                        
+                        $eb_capacity = intval($ticket_details['capacity']);
+                        
+                        // If this is a force sync for a specific product/date, or if there's a difference between WC and EB
+                        if ($specific_product_id > 0 || $wc_stock !== $eb_capacity) {
+                            BRCC_Helpers::log_info('sync_eventbrite_tickets: Syncing inventory.', [
+                                'wc_product_id' => $wc_product_id,
+                                'ticket_id' => $ticket_id,
+                                'wc_stock' => $wc_stock,
+                                'eb_capacity' => $eb_capacity,
+                                'force_sync' => ($specific_product_id > 0) ? 'Yes' : 'No'
+                            ]);
+                            
+                            // Update Eventbrite capacity to match WooCommerce stock
+                            $update_result = $this->update_eventbrite_ticket_capacity($ticket_id, $wc_stock);
+                            
+                            if (!is_wp_error($update_result)) {
+                                BRCC_Helpers::log_info('sync_eventbrite_tickets: Successfully synced inventory.', [
+                                    'wc_product_id' => $wc_product_id,
+                                    'ticket_id' => $ticket_id,
+                                    'new_capacity' => $wc_stock
+                                ]);
+                            } else {
+                                BRCC_Helpers::log_error('sync_eventbrite_tickets: Failed to sync inventory.', [
+                                    'wc_product_id' => $wc_product_id,
+                                    'ticket_id' => $ticket_id,
+                                    'error' => $update_result->get_error_message()
+                                ]);
+                            }
                         } else {
-                            $error_message = is_wp_error($attendees_data) ? $attendees_data->get_error_message() : 'Attendees key missing.';
-                            BRCC_Helpers::log_error('sync_eventbrite_tickets: Failed to fetch attendees for event.', [
-                                'event_id' => $event_id, 'error' => $error_message
+                            BRCC_Helpers::log_info('sync_eventbrite_tickets: Inventory already in sync.', [
+                                'wc_product_id' => $wc_product_id,
+                                'ticket_id' => $ticket_id,
+                                'stock' => $wc_stock
                             ]);
                         }
+
                     }
                 }
-            } 
+            }
             // Handle general (non-date-specific) mappings
-            elseif (is_numeric($product_id_key) && isset($mapping_data['eventbrite_event_id'])) {
+            if (is_numeric($product_id_key) && isset($mapping_data['eventbrite_event_id'])) {
                  $wc_product_id = (int) $product_id_key;
+                 
+                 // Skip if specific product requested and this isn't it
+                 if ($specific_product_id > 0 && $wc_product_id != $specific_product_id) {
+                     continue;
+                 }
+                 
+                 // Skip if specific date requested (general mappings don't have dates)
+                 if (!empty($specific_date)) {
+                     // We could potentially check if this product has any date-specific mappings for this date
+                     // For now, we'll skip general mappings when a specific date is requested
+                     continue;
+                 }
+                 
                  $event_id = $mapping_data['eventbrite_event_id'];
 
                  BRCC_Helpers::log_info('sync_eventbrite_tickets: Processing general mapping.', [
@@ -1615,30 +1802,95 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
                  // Fetch attendees for this event
                  $attendees_data = $this->get_event_attendees($event_id);
 
-                 if (!is_wp_error($attendees_data) && isset($attendees_data['attendees'])) {
-                     $quantity_sold = count($attendees_data['attendees']); // Simple count
-
-                     BRCC_Helpers::log_info('sync_eventbrite_tickets: Fetched attendees.', [
-                         'event_id' => $event_id, 'attendee_count' => $quantity_sold
+                 // Get the ticket ID for this event
+                 $ticket_id = $this->get_eventbrite_ticket_id_for_product($wc_product_id);
+                 
+                 if (!$ticket_id) {
+                     BRCC_Helpers::log_warning('sync_eventbrite_tickets: No ticket ID found for product.', [
+                         'wc_product_id' => $wc_product_id, 'event_id' => $event_id
+                     ]);
+                     continue;
+                 }
+                 
+                 // Get current WooCommerce stock
+                 $product = wc_get_product($wc_product_id);
+                 if (!$product || !$product->managing_stock()) {
+                     BRCC_Helpers::log_warning('sync_eventbrite_tickets: Product not found or not managing stock.', [
+                         'wc_product_id' => $wc_product_id
+                     ]);
+                     continue;
+                 }
+                 
+                 $wc_stock = $product->get_stock_quantity();
+                 
+                 // Get current Eventbrite ticket capacity
+                 $ticket_details = $this->get_eventbrite_ticket($ticket_id);
+                 if (is_wp_error($ticket_details) || !isset($ticket_details['capacity'])) {
+                     BRCC_Helpers::log_error('sync_eventbrite_tickets: Failed to get ticket details.', [
+                         'ticket_id' => $ticket_id,
+                         'error' => is_wp_error($ticket_details) ? $ticket_details->get_error_message() : 'No capacity found'
+                     ]);
+                     continue;
+                 }
+                 
+                 $eb_capacity = intval($ticket_details['capacity']);
+                 
+                 // If this is a force sync for a specific product, or if there's a difference between WC and EB
+                 if ($specific_product_id > 0 || $wc_stock !== $eb_capacity) {
+                     BRCC_Helpers::log_info('sync_eventbrite_tickets: Syncing inventory.', [
+                         'wc_product_id' => $wc_product_id,
+                         'ticket_id' => $ticket_id,
+                         'wc_stock' => $wc_stock,
+                         'eb_capacity' => $eb_capacity,
+                         'force_sync' => ($specific_product_id > 0) ? 'Yes' : 'No'
                      ]);
                      
-                     // Update WooCommerce stock
-                     // $sales_tracker->update_woocommerce_stock($wc_product_id, $quantity_sold, 'Eventbrite Sync (Attendee Count)');
-                     // TODO: Review stock update logic here as well.
-                      BRCC_Helpers::log_warning('sync_eventbrite_tickets: Attendee count based stock update logic needs review.', [
-                          'wc_product_id' => $wc_product_id, 'event_id' => $event_id, 'attendee_count' => $quantity_sold
-                      ]);
-
+                     // Update Eventbrite capacity to match WooCommerce stock
+                     $update_result = $this->update_eventbrite_ticket_capacity($ticket_id, $wc_stock);
+                     
+                     if (!is_wp_error($update_result)) {
+                         BRCC_Helpers::log_info('sync_eventbrite_tickets: Successfully synced inventory.', [
+                             'wc_product_id' => $wc_product_id,
+                             'ticket_id' => $ticket_id,
+                             'new_capacity' => $wc_stock
+                         ]);
+                     } else {
+                         BRCC_Helpers::log_error('sync_eventbrite_tickets: Failed to sync inventory.', [
+                             'wc_product_id' => $wc_product_id,
+                             'ticket_id' => $ticket_id,
+                             'error' => $update_result->get_error_message()
+                         ]);
+                     }
                  } else {
-                     $error_message = is_wp_error($attendees_data) ? $attendees_data->get_error_message() : 'Attendees key missing.';
+                     BRCC_Helpers::log_info('sync_eventbrite_tickets: Inventory already in sync.', [
+                         'wc_product_id' => $wc_product_id,
+                         'ticket_id' => $ticket_id,
+                         'stock' => $wc_stock
+                     ]);
+                 }
+
+                 if (is_wp_error($attendees_data)) {
                      BRCC_Helpers::log_error('sync_eventbrite_tickets: Failed to fetch attendees for event.', [
-                         'event_id' => $event_id, 'error' => $error_message
+                         'event_id' => $event_id,
+                         'error' => $attendees_data->get_error_message()
                      ]);
                  }
             }
         }
         
-        BRCC_Helpers::log_info('--- END sync_eventbrite_tickets ---');
+        // Log summary of what was done
+        if ($specific_product_id > 0 || !empty($specific_date)) {
+            $filter_info = [];
+            if ($specific_product_id > 0) {
+                $filter_info[] = "Product ID: $specific_product_id";
+            }
+            if (!empty($specific_date)) {
+                $filter_info[] = "Date: $specific_date";
+            }
+            BRCC_Helpers::log_info('--- END sync_eventbrite_tickets (Filtered: ' . implode(', ', $filter_info) . ') ---');
+        } else {
+            BRCC_Helpers::log_info('--- END sync_eventbrite_tickets (All Products) ---');
+        }
     }
 
     /**
@@ -2208,62 +2460,104 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
      * @param WC_Order $order The order object.
      */
     public function handle_order_stock_reduction($order) {
-        // BRCC_Helpers::log_debug('handle_order_stock_reduction: Triggered for Order ID: ' . $order->get_id()); // Removed debug log
-        if (!is_a($order, 'WC_Order')) {
-             BRCC_Helpers::log_error('handle_order_stock_reduction: Invalid order object received.');
-             return;
+        if (!$order instanceof WC_Order) {
+            BRCC_Helpers::log_error('handle_order_stock_reduction: Invalid order object received.');
+            return;
         }
-        foreach ($order->get_items() as $item_id => $item) { // Added item_id for logging
-            if (!is_a($item, 'WC_Order_Item_Product')) {
+
+        $order_id = $order->get_id();
+        BRCC_Helpers::log_info("--- START handle_order_stock_reduction for Order ID: {$order_id} ---");
+
+        $items = $order->get_items();
+        if (empty($items)) {
+            BRCC_Helpers::log_info("handle_order_stock_reduction: No items found in Order ID: {$order_id}.");
+            BRCC_Helpers::log_info("--- END handle_order_stock_reduction for Order ID: {$order_id} ---"); // Added end log here too
+            return;
+        }
+
+        foreach ($items as $item_id => $item) {
+            if (!$item instanceof WC_Order_Item_Product) {
+                BRCC_Helpers::log_debug("handle_order_stock_reduction: Skipping non-product item ID: {$item_id} in Order ID: {$order_id}");
                 continue;
             }
-            $product_id = $item->get_variation_id() ? $item->get_variation_id() : $item->get_product_id();
-            $product = wc_get_product($product_id);
+
+            $product_id = $item->get_product_id();
+            $variation_id = $item->get_variation_id();
+            $target_product_id = $variation_id ? $variation_id : $product_id; // Use variation ID if available
+            $product = wc_get_product($target_product_id);
             $quantity_sold = $item->get_quantity(); // Get quantity sold in this order item
 
+            BRCC_Helpers::log_debug("handle_order_stock_reduction: Processing Item ID: {$item_id}, Product ID: {$product_id}, Variation ID: {$variation_id}, Target Product ID: {$target_product_id}, Quantity Sold: {$quantity_sold}");
+
             if ($product && $product->managing_stock()) {
+                BRCC_Helpers::log_debug("handle_order_stock_reduction: Product ID {$target_product_id} manages stock. Proceeding with Eventbrite sync check.");
                 // Stock has already been reduced by WooCommerce at this point.
                 // Now, attempt to decrement Eventbrite capacity.
 
                 // 1. Get booking date/time from item meta
                 $booking_date = BRCC_Helpers::get_fooevents_date_from_item($item); // Use helper
                 $booking_time = BRCC_Helpers::extract_booking_time_from_item($item); // Use helper
+                BRCC_Helpers::log_debug("handle_order_stock_reduction: Extracted Booking Date: " . var_export($booking_date, true) . ", Booking Time: " . var_export($booking_time, true));
 
                 // 2. Find Eventbrite Ticket ID
-                $ticket_id = $this->get_eventbrite_ticket_id_for_product($product_id, $booking_date, $booking_time);
+                BRCC_Helpers::log_debug("handle_order_stock_reduction: Looking up Eventbrite Ticket ID for WC Product ID: {$target_product_id}, Booking Date: " . var_export($booking_date, true) . ", Booking Time: " . var_export($booking_time, true));
+                $ticket_id = $this->get_eventbrite_ticket_id_for_product($target_product_id, $booking_date, $booking_time); // Use target_product_id
+                BRCC_Helpers::log_debug("handle_order_stock_reduction: Found Eventbrite Ticket ID: " . var_export($ticket_id, true));
 
-                if ($ticket_id) {
-                    BRCC_Helpers::log_info("handle_order_stock_reduction: Found Eventbrite Ticket ID {$ticket_id} for WC Product ID {$product_id}. Attempting capacity update.", ['order_id' => $order->get_id(), 'item_id' => $item_id]);
+                // Add log if date or time extraction failed
+                if (empty($booking_date) || empty($booking_time)) {
+                     BRCC_Helpers::log_operation(
+                        'Eventbrite Sync',
+                        'Skipped Item',
+                        sprintf("Skipping Eventbrite sync for Order ID: %d, Item ID: %d, Product ID: %d - Could not extract booking date (%s) or time (%s).", $order_id, $item_id, $target_product_id, var_export($booking_date, true), var_export($booking_time, true)),
+                        'warning'
+                    );
+                } elseif ($ticket_id) { // Only proceed if date/time were found AND ticket_id was found
+                    BRCC_Helpers::log_operation( // Use log_operation for consistency
+                        'Eventbrite Sync',
+                        'Ticket Found',
+                        sprintf("Found Eventbrite Ticket ID %s for WC Product ID %d (Order: %d, Item: %d, Date: %s, Time: %s). Attempting capacity update.", $ticket_id, $target_product_id, $order_id, $item_id, $booking_date, $booking_time),
+                        'info'
+                    );
 
                     // 3. Get current Eventbrite capacity
-                    $ticket_details = $this->get_eventbrite_ticket($ticket_id);
+                    BRCC_Helpers::log_debug("handle_order_stock_reduction: Fetching current details for Ticket ID: {$ticket_id}");
+                    $ticket_details = $this->get_eventbrite_ticket($ticket_id); // This function should have its own logging
 
                     if (!is_wp_error($ticket_details) && isset($ticket_details['capacity'])) {
                         $current_capacity = intval($ticket_details['capacity']);
+                        BRCC_Helpers::log_debug("handle_order_stock_reduction: Received current capacity: {$current_capacity} for Ticket ID: {$ticket_id}");
+
                         // Check if capacity is unlimited (-1)
                         if ($current_capacity === -1) {
-                             BRCC_Helpers::log_info("handle_order_stock_reduction: Eventbrite Ticket ID {$ticket_id} has unlimited capacity. Skipping decrement.", ['order_id' => $order->get_id()]);
+                             BRCC_Helpers::log_info("handle_order_stock_reduction: Eventbrite Ticket ID {$ticket_id} has unlimited capacity. Skipping decrement.");
                         } else {
                             $new_capacity = $current_capacity - $quantity_sold;
                             $new_capacity = max(0, $new_capacity); // Ensure capacity doesn't go below zero
 
-                            BRCC_Helpers::log_info("handle_order_stock_reduction: Current EB Capacity: {$current_capacity}, Quantity Sold: {$quantity_sold}, New Capacity: {$new_capacity}", ['ticket_id' => $ticket_id]);
+                            BRCC_Helpers::log_info("handle_order_stock_reduction: Calculated capacity for Ticket ID {$ticket_id}. Current: {$current_capacity}, Sold: {$quantity_sold}, New Target: {$new_capacity}");
 
                             // 4. Update Eventbrite capacity
-                            $update_result = $this->update_eventbrite_ticket_capacity($ticket_id, $new_capacity);
+                            BRCC_Helpers::log_debug("handle_order_stock_reduction: Calling update_eventbrite_ticket_capacity for Ticket ID: {$ticket_id} with new capacity: {$new_capacity}");
+                            $update_result = $this->update_eventbrite_ticket_capacity($ticket_id, $new_capacity); // This function should have its own logging
 
                             if (!is_wp_error($update_result)) {
-                                BRCC_Helpers::log_info("handle_order_stock_reduction: Successfully updated Eventbrite capacity for Ticket ID {$ticket_id} to {$new_capacity}.", ['order_id' => $order->get_id()]);
+                                BRCC_Helpers::log_info("handle_order_stock_reduction: Successfully triggered Eventbrite capacity update for Ticket ID {$ticket_id} to {$new_capacity}.");
                                  $log_details_eb = sprintf(
                                     __('Triggered Eventbrite capacity update for Ticket ID %s (New Capacity: %d) due to WooCommerce Order #%s.', 'brcc-inventory-tracker'),
                                     $ticket_id,
                                     $new_capacity,
-                                    $order->get_id()
+                                    $order_id // Use order_id variable
                                 );
-                                BRCC_Helpers::log_operation('Eventbrite Sync', 'Update Capacity (from WC)', $log_details_eb);
+                                BRCC_Helpers::log_operation(
+                                    'Eventbrite Sync', // component
+                                    'Update Capacity (from WC)', // operation
+                                    $log_details_eb, // message
+                                    'success' // log_type - successful capacity update
+                                );
                             } else {
                                 BRCC_Helpers::log_error("handle_order_stock_reduction: Failed to update Eventbrite capacity for Ticket ID {$ticket_id}.", [
-                                    'order_id' => $order->get_id(),
+                                    'order_id' => $order_id, // Use order_id variable
                                     'error_code' => $update_result->get_error_code(),
                                     'error_message' => $update_result->get_error_message()
                                 ]);
@@ -2271,17 +2565,30 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
                         }
                     } else {
                          $error_message = is_wp_error($ticket_details) ? $ticket_details->get_error_message() : 'Capacity key missing or invalid response.';
-                         BRCC_Helpers::log_error("handle_order_stock_reduction: Failed to get current Eventbrite capacity for Ticket ID {$ticket_id}. Error: " . $error_message, ['order_id' => $order->get_id(), 'response' => $ticket_details]);
+                         BRCC_Helpers::log_error("handle_order_stock_reduction: Failed to get current Eventbrite capacity for Ticket ID {$ticket_id}. Error: " . $error_message, ['order_id' => $order_id, 'response' => $ticket_details]);
                     }
-                } else {
-                     BRCC_Helpers::log_warning("handle_order_stock_reduction: Could not find Eventbrite Ticket ID mapping for WC Product ID {$product_id}. Skipping capacity update.", ['order_id' => $order->get_id(), 'item_id' => $item_id, 'booking_date' => $booking_date, 'booking_time' => $booking_time]);
+                } else { // Ticket ID not found, but date/time were present
+                     // Ensure this uses log_operation via the updated log_warning
+                     BRCC_Helpers::log_warning(
+                         sprintf("handle_order_stock_reduction: Could not find Eventbrite Ticket ID mapping for WC Product ID %d. Skipping capacity update.", $target_product_id),
+                         ['component' => 'Eventbrite Sync', 'operation' => 'Mapping Not Found', 'order_id' => $order_id, 'item_id' => $item_id, 'booking_date' => $booking_date, 'booking_time' => $booking_time]
+                     );
                 }
 
                 // Removed call to update_eventbrite_event_status as capacity update handles the sync now.
                 // $this->update_eventbrite_event_status($product_id);
 
+            } else {
+                 // Add log if skipped due to stock management setting
+                 BRCC_Helpers::log_operation(
+                    'Eventbrite Sync',
+                    'Skipped Item',
+                    sprintf("Skipping Eventbrite sync for Order ID: %d, Item ID: %d, Product ID: %d - Product does not manage stock or not found.", $order_id, $item_id, $target_product_id),
+                    'info'
+                 );
             }
         }
+        BRCC_Helpers::log_info("--- END handle_order_stock_reduction for Order ID: {$order_id} ---");
     }
 
     /**
@@ -2290,20 +2597,25 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
      * @param WC_Product $product The product object whose stock was set.
      */
     public function handle_direct_stock_update($product) {
-        if (!is_a($product, 'WC_Product')) {
+        if (!$product instanceof WC_Product) {
              BRCC_Helpers::log_error('handle_direct_stock_update: Invalid product object received.');
             return;
         }
-        
         $product_id = $product->get_id();
-        // BRCC_Helpers::log_debug('handle_direct_stock_update: Triggered for Product ID: ' . $product_id); // Removed debug log
+        $stock_quantity = $product->get_stock_quantity();
+        $stock_status = $product->get_stock_status();
+        BRCC_Helpers::log_info("--- START handle_direct_stock_update for Product ID: {$product_id} (New Stock Qty: {$stock_quantity}, Status: {$stock_status}) ---");
 
         if ($product->managing_stock()) {
+            BRCC_Helpers::log_debug("handle_direct_stock_update: Product ID {$product_id} manages stock. Checking Eventbrite status.");
             // This hook fires AFTER stock is set. We need to sync the *status* to Eventbrite.
             // For direct stock updates, we primarily care if it hit zero.
             // A full capacity sync might be better handled by a dedicated sync button/cron.
-            $this->update_eventbrite_event_status($product_id);
+            $this->update_eventbrite_event_status($product_id); // This function has its own logging
+        } else {
+            BRCC_Helpers::log_debug("handle_direct_stock_update: Product ID {$product_id} does not manage stock. Skipping Eventbrite status check.");
         }
+        BRCC_Helpers::log_info("--- END handle_direct_stock_update for Product ID: {$product_id} ---");
     }
 
     /**
@@ -2314,51 +2626,89 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
      * @param int $product_id WooCommerce Product ID.
      */
     public function update_eventbrite_event_status($product_id) {
-        BRCC_Helpers::log_info('update_eventbrite_event_status: Checking status for Product ID: ' . $product_id);
+        BRCC_Helpers::log_info("--- START update_eventbrite_event_status for Product ID: {$product_id} ---");
         $product = wc_get_product($product_id);
 
         if (!$product) {
-            BRCC_Helpers::log_error('update_eventbrite_event_status: Product not found: ' . $product_id);
+            BRCC_Helpers::log_error("update_eventbrite_event_status: Product not found: {$product_id}");
+            BRCC_Helpers::log_info("--- END update_eventbrite_event_status for Product ID: {$product_id} ---");
             return;
         }
 
-        // Check if stock management is enabled and stock is zero or less
-        if ($product->managing_stock() && $product->get_stock_quantity() <= 0) {
-            BRCC_Helpers::log_info('update_eventbrite_event_status: Product ID ' . $product_id . ' has stock <= 0. Attempting to find and update Eventbrite ticket status.');
+        $stock_quantity = $product->get_stock_quantity();
+        $is_in_stock = $product->is_in_stock(); // Checks quantity > 0 OR status is 'instock'
+        $managing_stock = $product->managing_stock();
+        $stock_status = $product->get_stock_status(); // 'instock' or 'outofstock'
+
+        BRCC_Helpers::log_debug("update_eventbrite_event_status: WC Stock Details for Product ID {$product_id} - Managed: " . ($managing_stock ? 'Yes' : 'No') . ", Qty: {$stock_quantity}, Status: {$stock_status}, is_in_stock(): " . ($is_in_stock ? 'Yes' : 'No'));
+
+        // Check if stock management is enabled AND stock is effectively zero (either quantity <= 0 or status is 'outofstock')
+        if ($managing_stock && !$is_in_stock) {
+            BRCC_Helpers::log_info("update_eventbrite_event_status: Product ID {$product_id} is OUT OF STOCK in WooCommerce. Attempting to find and update corresponding Eventbrite ticket(s) status.");
 
             // Need to find the corresponding Eventbrite Ticket ID(s)
             // This might involve checking general mapping and date-specific mappings
-            
+            $found_mapping = false;
+
             // 1. Check general mapping
-            $this->load_mappings();
-            $general_ticket_id = $this->all_mappings[$product_id]['eventbrite_ticket_id'] ?? null;
+            $this->load_mappings(); // Ensure mappings are loaded
+            // Check general mapping, prioritizing manual_eventbrite_id, then ticket_class_id, then eventbrite_id
+            $general_ticket_id = null;
+            if (isset($this->all_mappings[$product_id])) {
+                $general_mapping = $this->all_mappings[$product_id];
+                if (!empty($general_mapping['manual_eventbrite_id'])) {
+                    $general_ticket_id = $general_mapping['manual_eventbrite_id'];
+                } elseif (!empty($general_mapping['ticket_class_id'])) {
+                    $general_ticket_id = $general_mapping['ticket_class_id'];
+                } elseif (!empty($general_mapping['eventbrite_id'])) {
+                    $general_ticket_id = $general_mapping['eventbrite_id'];
+                }
+            }
             if ($general_ticket_id) {
-                 BRCC_Helpers::log_info('update_eventbrite_event_status: Found general mapping. Ticket ID: ' . $general_ticket_id);
-                 $this->set_eventbrite_ticket_sold_out($general_ticket_id, $product_id);
+                 BRCC_Helpers::log_info("update_eventbrite_event_status: Found general mapping. Ticket ID: {$general_ticket_id}. Attempting to set sold out.");
+                 $this->set_eventbrite_ticket_sold_out($general_ticket_id, $product_id); // This function has its own logging
+                 $found_mapping = true;
+            } else {
+                 BRCC_Helpers::log_debug("update_eventbrite_event_status: No general Eventbrite mapping found for Product ID: {$product_id}");
             }
 
             // 2. Check date-specific mappings
             $date_key = $product_id . '_dates';
             if (isset($this->all_mappings[$date_key])) {
-                 BRCC_Helpers::log_info('update_eventbrite_event_status: Checking date-specific mappings for Product ID: ' . $product_id);
+                 BRCC_Helpers::log_info("update_eventbrite_event_status: Checking date-specific mappings for Product ID: {$product_id}");
                  foreach ($this->all_mappings[$date_key] as $date_time_key => $specific_mapping) {
-                     $date_ticket_id = $specific_mapping['eventbrite_ticket_id'] ?? null;
+                     // Check date-specific mapping, prioritizing manual_eventbrite_id, then ticket_class_id, then eventbrite_id
+                     $date_ticket_id = null;
+                     if (!empty($specific_mapping['manual_eventbrite_id'])) {
+                         $date_ticket_id = $specific_mapping['manual_eventbrite_id'];
+                     } elseif (!empty($specific_mapping['ticket_class_id'])) {
+                         $date_ticket_id = $specific_mapping['ticket_class_id'];
+                     } elseif (!empty($specific_mapping['eventbrite_id'])) {
+                         $date_ticket_id = $specific_mapping['eventbrite_id'];
+                     }
                      if ($date_ticket_id && $date_ticket_id !== $general_ticket_id) { // Avoid double-updating if same ID used
-                          BRCC_Helpers::log_info('update_eventbrite_event_status: Found date-specific mapping. Date/Time Key: ' . $date_time_key . ', Ticket ID: ' . $date_ticket_id);
-                          $this->set_eventbrite_ticket_sold_out($date_ticket_id, $product_id);
+                          BRCC_Helpers::log_info("update_eventbrite_event_status: Found date-specific mapping. Date/Time Key: {$date_time_key}, Ticket ID: {$date_ticket_id}. Attempting to set sold out.");
+                          $this->set_eventbrite_ticket_sold_out($date_ticket_id, $product_id); // This function has its own logging
+                          $found_mapping = true;
+                     } elseif ($date_ticket_id && $date_ticket_id === $general_ticket_id) {
+                          BRCC_Helpers::log_debug("update_eventbrite_event_status: Date-specific mapping Ticket ID {$date_ticket_id} matches general mapping. Already processed (or will be). Skipping.");
+                     } else {
+                          BRCC_Helpers::log_debug("update_eventbrite_event_status: No valid Eventbrite Ticket ID found in date-specific mapping for key: {$date_time_key}");
                      }
                  }
+            } else {
+                 BRCC_Helpers::log_debug("update_eventbrite_event_status: No date-specific mappings found for Product ID: {$product_id} (Key: {$date_key})");
             }
-            
-            if (!$general_ticket_id && !isset($this->all_mappings[$date_key])) {
-                 BRCC_Helpers::log_warning('update_eventbrite_event_status: No Eventbrite ticket mapping found for Product ID: ' . $product_id . '. Cannot update status.');
+
+            if (!$found_mapping) {
+                 BRCC_Helpers::log_warning("update_eventbrite_event_status: No Eventbrite ticket mapping (general or date-specific) found for Product ID: {$product_id}. Cannot update Eventbrite status.");
             }
 
         } else {
-             BRCC_Helpers::log_info('update_eventbrite_event_status: Product ID ' . $product_id . ' is in stock or not managing stock. No status change needed on Eventbrite.');
-             // Potentially add logic here to re-enable the Eventbrite ticket if it was previously set to sold out?
-             // This requires tracking the previous state or fetching current Eventbrite status.
+             BRCC_Helpers::log_info("update_eventbrite_event_status: Product ID {$product_id} has stock or stock not managed. No 'sold out' action needed on Eventbrite.");
+             // Potential future enhancement: If stock was previously 0 and now > 0, maybe re-enable the Eventbrite ticket? Requires storing previous state or fetching current EB state.
         }
+        BRCC_Helpers::log_info("--- END update_eventbrite_event_status for Product ID: {$product_id} ---");
     }
 
 /**
@@ -2371,27 +2721,45 @@ $processing_result = $this->process_eventbrite_order($order_details, $request);
  * @param int $product_id WooCommerce Product ID (for context).
  */
 public function set_eventbrite_ticket_sold_out($ticket_id, $product_id) { // Added $product_id parameter
-    BRCC_Helpers::log_info('set_eventbrite_ticket_sold_out: Attempting to mark Ticket ID ' . $ticket_id . ' as sold out (linked to WC Product ID ' . $product_id . ').');
+    BRCC_Helpers::log_info("--- START set_eventbrite_ticket_sold_out for Ticket ID: {$ticket_id} (triggered by WC Product ID: {$product_id}) ---");
 
-    // Option 1: Update capacity to 0 (More reliable via API)
-    // We already have a function for this: update_eventbrite_ticket_capacity
-    // Let's call that instead of trying to manipulate sales status directly.
-    $update_result = $this->update_eventbrite_ticket_capacity($ticket_id, 0);
-
-    if (!is_wp_error($update_result)) {
-        BRCC_Helpers::log_info('set_eventbrite_ticket_sold_out: Successfully set capacity to 0 for Ticket ID ' . $ticket_id . '.');
-        $this->send_sold_out_notification($product_id, $ticket_id); // Send notification on success
-        return true;
-    } else {
-        BRCC_Helpers::log_error('set_eventbrite_ticket_sold_out: Failed to set capacity to 0 for Ticket ID ' . $ticket_id . '.', [
-            'error_code' => $update_result->get_error_code(),
-            'error_message' => $update_result->get_error_message()
-        ]);
+    if (empty($ticket_id)) {
+        BRCC_Helpers::log_error('set_eventbrite_ticket_sold_out: Invalid Ticket ID provided.');
+        BRCC_Helpers::log_info("--- END set_eventbrite_ticket_sold_out for Ticket ID: {$ticket_id} ---");
         return false;
     }
 
+    // Check if this ticket has already been marked as sold out recently to avoid redundant API calls
+    $transient_key = 'brcc_eb_sold_out_' . $ticket_id;
+    if (get_transient($transient_key)) {
+        BRCC_Helpers::log_info("set_eventbrite_ticket_sold_out: Ticket ID {$ticket_id} was recently marked as sold out (transient found). Skipping redundant API call.");
+        BRCC_Helpers::log_info("--- END set_eventbrite_ticket_sold_out for Ticket ID: {$ticket_id} ---");
+        return true; // Assume success as it was recently done
+    }
 
-    // Option 2: Try to update sales_status (Less reliable, might not be directly settable)
+    // Option 1: Update capacity to 0 (More reliable via API)
+    // We already have a function for this: update_eventbrite_ticket_capacity
+    BRCC_Helpers::log_debug("set_eventbrite_ticket_sold_out: Calling update_eventbrite_ticket_capacity({$ticket_id}, 0)");
+    $update_result = $this->update_eventbrite_ticket_capacity($ticket_id, 0); // This function has its own logging
+
+    if (!is_wp_error($update_result)) {
+        BRCC_Helpers::log_info("set_eventbrite_ticket_sold_out: Successfully set capacity to 0 for Ticket ID {$ticket_id} via update_eventbrite_ticket_capacity.");
+        // Set a transient to prevent rapid duplicate calls for the same ticket
+        set_transient($transient_key, time(), MINUTE_IN_SECONDS * 5); // Prevent re-triggering for 5 minutes
+        BRCC_Helpers::log_debug("set_eventbrite_ticket_sold_out: Set transient '{$transient_key}' to prevent immediate re-trigger.");
+        $this->send_sold_out_notification($product_id, $ticket_id); // Send notification on success
+        BRCC_Helpers::log_info("--- END set_eventbrite_ticket_sold_out for Ticket ID: {$ticket_id} ---");
+        return true;
+    } else {
+        BRCC_Helpers::log_error("set_eventbrite_ticket_sold_out: Failed to set capacity to 0 for Ticket ID {$ticket_id} via update_eventbrite_ticket_capacity.", [
+            'error_code' => $update_result->get_error_code(),
+            'error_message' => $update_result->get_error_message()
+        ]);
+        BRCC_Helpers::log_info("--- END set_eventbrite_ticket_sold_out for Ticket ID: {$ticket_id} ---");
+        return false;
+    }
+
+    // Option 2: Try to update sales_status (Less reliable, might not be directly settable) - KEEPING COMMENTED
     /*
     $url = $this->api_url . '/ticket_classes/' . $ticket_id . '/';
     $data = json_encode(array(

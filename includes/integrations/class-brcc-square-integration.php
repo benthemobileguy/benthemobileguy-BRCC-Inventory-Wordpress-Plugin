@@ -100,18 +100,10 @@ class BRCC_Square_Integration {
              BRCC_Helpers::log_error('handle_scheduled_square_update: Failed to create instance or access product mappings.');
              return;
         }
-
-        // Call the original update function
-        // Note: update_square_inventory expects quantity sold, which might need adjustment logic later
-        // For now, we pass the quantity directly, assuming it represents the amount to deduct or set.
-        // The update_square_inventory function itself needs implementation/review.
-        // Assign args to variables first for clarity
         $product_id = $args['product_id'];
-        $quantity = $args['quantity']; // This might need adjustment based on how update_square_inventory works
+        $quantity = $args['quantity'];
         $booking_date = $args['booking_date'] ?? null;
         $booking_time = $args['booking_time'] ?? null;
-
-        $instance->update_square_inventory($product_id, $quantity, $booking_date, $booking_time);
 
         BRCC_Helpers::log_info('--- END handle_scheduled_square_update ---', $args);
     }
@@ -255,16 +247,69 @@ class BRCC_Square_Integration {
                         // Record the sale (which also handles Eventbrite sync via sync_to_eventbrite)
                         $this->record_square_sale($product_id, $quantity, $event_date, $event_time, $order_id);
 
-                        // Update WooCommerce stock to reflect the Square sale
-                        $sales_tracker = new BRCC_Sales_Tracker(); // Need an instance
-                        $sales_tracker->update_woocommerce_stock($product_id, $quantity, 'Square Order #' . $order_id);
-                        $log_details = sprintf(
-                            __('Triggered WooCommerce stock update for Product ID %d (Quantity: -%d) due to Square Order #%s.', 'brcc-inventory-tracker'),
-                            $product_id,
-                            $quantity,
-                            $order_id
-                        );
-                        BRCC_Helpers::log_operation('WooCommerce Sync', 'Update Stock (from Square)', $log_details);
+                        // --- BRCC DEBUG: Log Square Order Metadata ---
+                        if (isset($order['metadata']) && is_array($order['metadata'])) {
+                            BRCC_Helpers::log_debug("process_square_order: Square Order #{$order_id} Metadata: " . print_r($order['metadata'], true));
+                        } else {
+                            BRCC_Helpers::log_debug("process_square_order: Square Order #{$order_id} has no metadata.");
+                        }
+                        // --- END BRCC DEBUG ---
+
+                        // Check if the order originated from WooCommerce via Square Payment Gateway
+                        // Common metadata keys used by various WC Square Gateway plugins
+                        $woo_metadata_keys = [
+                            'woocommerce_order_id', // Standard WooCommerce Square plugin
+                            'wc_order_id',          // Common alternative
+                            'order_id',             // Generic, might be used
+                            'WooCommerce Order ID', // Some plugins might use display names
+                            'source_application',   // Square sometimes includes source app info
+                            'note',                 // Sometimes order notes contain WC Order ID
+                            'customer_note'         // Check customer notes too
+                        ];
+                        $is_woocommerce_originated = false;
+                        $found_woo_key = 'N/A'; // For logging
+
+                        if (isset($order['metadata']) && is_array($order['metadata'])) {
+                            foreach ($woo_metadata_keys as $key) {
+                                if (!empty($order['metadata'][$key])) {
+                                    // Special check for 'source_application' which might contain 'WooCommerce'
+                                    if ($key === 'source_application') {
+                                        if (is_array($order['metadata'][$key]) && !empty($order['metadata'][$key]['name']) && stripos($order['metadata'][$key]['name'], 'WooCommerce') !== false) {
+                                            $is_woocommerce_originated = true;
+                                            $found_woo_key = $key . ' (name contains WooCommerce)';
+                                            break;
+                                        }
+                                    } else {
+                                        $is_woocommerce_originated = true;
+                                        $found_woo_key = $key;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // --- BRCC DEBUG: Log WC Origin Check Result ---
+                        BRCC_Helpers::log_debug("process_square_order: Square Order #{$order_id} - WooCommerce Origin Check Result: " . ($is_woocommerce_originated ? 'TRUE' : 'FALSE') . " (Key Found: {$found_woo_key})");
+                        // --- END BRCC DEBUG ---
+
+
+                        if ($is_woocommerce_originated) {
+                            BRCC_Helpers::log_info(sprintf(
+                                'process_square_order: Skipping WC stock update for Square Order #%s as it likely originated from WooCommerce (Metadata found).',
+                                $order_id
+                            ));
+                        } else {
+                            // Update WooCommerce stock only for genuine Square sales (not those from WC Gateway)
+                            $sales_tracker = new BRCC_Sales_Tracker(); // Need an instance
+                            $sales_tracker->update_woocommerce_stock($product_id, $quantity, 'Square Order #' . $order_id);
+                            $log_details = sprintf(
+                                __('Triggered WooCommerce stock update for Product ID %d (Quantity: -%d) due to Square Order #%s.', 'brcc-inventory-tracker'),
+                                $product_id,
+                                $quantity,
+                                $order_id
+                            );
+                            BRCC_Helpers::log_operation('WooCommerce Sync', 'Update Stock (from Square)', $log_details);
+                        }
                     }
                 } catch (Exception $e) {
                     // Log exceptions but continue processing other items
@@ -613,9 +658,6 @@ class BRCC_Square_Integration {
             'handle_woocommerce_sale: Triggered for WC Order #%d, Product ID %d, Qty %d, Date %s, Time %s. Updating Square.',
             $order_id, $product_id, $quantity, $date ?? 'N/A', $time ?? 'N/A'
         ));
-
-        // Call the existing function to update Square inventory
-        $this->update_square_inventory($product_id, $quantity, $date, $time);
     }
     
     /**
@@ -640,14 +682,14 @@ class BRCC_Square_Integration {
         $mapping = $this->product_mappings->get_product_mappings($product_id, $date, $time);
         
         
-        // If we have an Eventbrite mapping, update the inventory
-        if (!empty($mapping['eventbrite_id'])) {
+        // If we have an Eventbrite mapping (using the manual ticket class ID), update the inventory
+        if (!empty($mapping['manual_eventbrite_id'])) { // Check for manual_eventbrite_id
             if (BRCC_Helpers::is_test_mode()) {
                 BRCC_Helpers::log_operation(
                     'Square',
                     'Update Eventbrite',
-                    sprintf(__('Would update Eventbrite ticket ID %s due to Square sale of product ID %s (Square Order ID: %s)', 'brcc-inventory-tracker'),
-                        $mapping['eventbrite_id'],
+                    sprintf(__('Would update Eventbrite ticket class ID %s due to Square sale of product ID %s (Square Order ID: %s)', 'brcc-inventory-tracker'),
+                        $mapping['manual_eventbrite_id'], // Use manual_eventbrite_id
                         $product_id,
                         $square_order_id
                     )
@@ -656,8 +698,8 @@ class BRCC_Square_Integration {
             }
             
             try {
-                // Get current ticket info
-                $ticket_info = $eventbrite->get_eventbrite_ticket($mapping['eventbrite_id']);
+                // Get current ticket info using manual_eventbrite_id
+                $ticket_info = $eventbrite->get_eventbrite_ticket($mapping['manual_eventbrite_id']);
                 
                 if (!is_wp_error($ticket_info)) {
                     // Calculate new capacity
@@ -673,14 +715,14 @@ class BRCC_Square_Integration {
                         $new_capacity = $sold;
                     }
                     
-                    // Update ticket capacity
-                    $result = $eventbrite->update_eventbrite_ticket_capacity($mapping['eventbrite_id'], $new_capacity);
+                    // Update ticket capacity using manual_eventbrite_id
+                    $result = $eventbrite->update_eventbrite_ticket_capacity($mapping['manual_eventbrite_id'], $new_capacity);
                     
                     if (!is_wp_error($result)) {
                         // Log the successful operation
                         $log_details = sprintf(
-                            __('Successfully updated Eventbrite ticket ID %s capacity to %d due to Square Order #%s (WC Product ID: %d).', 'brcc-inventory-tracker'),
-                            $mapping['eventbrite_id'],
+                            __('Successfully updated Eventbrite ticket class ID %s capacity to %d due to Square Order #%s (WC Product ID: %d).', 'brcc-inventory-tracker'),
+                            $mapping['manual_eventbrite_id'], // Use manual_eventbrite_id
                             $new_capacity,
                             $square_order_id,
                             $product_id
@@ -688,8 +730,8 @@ class BRCC_Square_Integration {
                         BRCC_Helpers::log_operation('Eventbrite Sync', 'Update Capacity (from Square)', $log_details);
 
                         BRCC_Helpers::log_info(sprintf( // Keep existing info log
-                            __('Successfully updated Eventbrite ticket ID %s after Square sale of product ID %s (Square Order ID: %s)', 'brcc-inventory-tracker'),
-                            $mapping['eventbrite_id'],
+                            __('Successfully updated Eventbrite ticket class ID %s after Square sale of product ID %s (Square Order ID: %s)', 'brcc-inventory-tracker'),
+                            $mapping['manual_eventbrite_id'], // Use manual_eventbrite_id
                             $product_id,
                             $square_order_id
                         ));
@@ -1088,41 +1130,96 @@ public function get_catalog_item($item_id) {
     
     return $result;
 }
-
 /**
- * Get orders for a specific date range
- * 
- * @param string $start_date Start date in Y-m-d format
- * @param string $end_date End date in Y-m-d format
- * @return array|WP_Error Orders or error
- */
-public function get_orders_for_date_range($start_date, $end_date) {
-    // Convert dates to RFC 3339 format
-    $begin_time = date('c', strtotime($start_date . ' 00:00:00'));
-    $end_time = date('c', strtotime($end_date . ' 23:59:59'));
-    
-    // Call Square API to get orders
-    $response = $this->call_square_api('/orders/search', 'POST', array(
-        'location_ids' => array($this->location_id),
-        'query' => array(
-            'filter' => array(
-                'state' => 'COMPLETED',
-                'date_time_filter' => array(
-                    'created_at' => array(
-                        'start_at' => $begin_time,
-                        'end_at' => $end_time
-                    )
-                )
-            )
-        )
-    ));
-    
-    if (is_wp_error($response)) {
-        return $response;
+     * Get Square orders within a specific date range using SearchOrders API.
+     * Handles pagination.
+     *
+     * @param string $start_date Start date (Y-m-d).
+     * @param string $end_date End date (Y-m-d).
+     * @return array|WP_Error Array of Square order objects or WP_Error on failure.
+     */
+    public function get_orders_for_date_range($start_date, $end_date) {
+        if (empty($this->access_token) || empty($this->location_id)) {
+            return new WP_Error('missing_credentials', __('Square API credentials (Access Token or Location ID) are not configured.', 'brcc-inventory-tracker'));
+        }
+
+        // Format dates for Square API (RFC 3339) - Assuming start of day for start_date and end of day for end_date
+        try {
+            // Use site's timezone for creating the start/end times relative to the dates provided
+            $site_timezone = wp_timezone(); 
+            $start_dt = new DateTime($start_date . ' 00:00:00', $site_timezone);
+            $end_dt = new DateTime($end_date . ' 23:59:59', $site_timezone);
+
+            // Convert to UTC for Square API
+            $start_dt->setTimezone(new DateTimeZone('UTC'));
+            $end_dt->setTimezone(new DateTimeZone('UTC'));
+
+            $start_time_rfc3339 = $start_dt->format(DateTime::RFC3339);
+            $end_time_rfc3339 = $end_dt->format(DateTime::RFC3339);
+
+        } catch (Exception $e) {
+            return new WP_Error('date_formatting_error', 'Error formatting dates for Square API: ' . $e->getMessage());
+        }
+
+        $all_orders = [];
+        $cursor = null;
+
+        BRCC_Helpers::log_info("Fetching Square orders from {$start_time_rfc3339} to {$end_time_rfc3339}");
+
+        do {
+            $query = [
+                'location_ids' => [$this->location_id],
+                'query' => [
+                    'filter' => [
+                        'date_time_filter' => [
+                            'created_at' => [
+                                'start_at' => $start_time_rfc3339,
+                                'end_at' => $end_time_rfc3339,
+                            ],
+                        ],
+                        'state_filter' => [
+                            'states' => ['COMPLETED'], // Only fetch completed orders
+                        ],
+                    ],
+                    'sort' => [
+                        'sort_field' => 'CREATED_AT',
+                        'sort_order' => 'ASC',
+                    ],
+                ],
+                 'return_entries' => false, // We only need order IDs initially if processing separately, but fetching full orders might be simpler here. Set to true if needed.
+                 'limit' => 100 // Adjust limit as needed (max 500 for SearchOrders?)
+            ];
+
+            if ($cursor) {
+                $query['cursor'] = $cursor;
+            }
+
+            $response = $this->call_square_api('/orders/search', 'POST', $query);
+
+            if (is_wp_error($response)) {
+                // Log the error and stop pagination
+                BRCC_Helpers::log_error("Square API error during SearchOrders: " . $response->get_error_message(), ['query' => $query]);
+                // Return partial results collected so far, or the error? Returning error might be safer.
+                return $response; 
+            }
+
+            if (!empty($response['orders'])) {
+                $all_orders = array_merge($all_orders, $response['orders']);
+                BRCC_Helpers::log_debug("Fetched " . count($response['orders']) . " Square orders. Total so far: " . count($all_orders));
+            } else {
+                 BRCC_Helpers::log_debug("No Square orders found in this page.");
+            }
+
+            // Check for cursor for next page
+            $cursor = $response['cursor'] ?? null;
+
+        } while ($cursor);
+
+        BRCC_Helpers::log_info("Finished fetching Square orders. Total found: " . count($all_orders));
+        return $all_orders;
     }
-    
-    return isset($response['orders']) ? $response['orders'] : array();
-}
+
+// Removed duplicate function get_orders_for_date_range below
 
 /**
  * Import historical Square sales data
@@ -1190,74 +1287,8 @@ public function import_from_square($start_date, $end_date) {
     return true;
 }
 
-/**
- * Update Square inventory based on WooCommerce changes
- *
- * @param int $product_id WooCommerce product ID
- * @param int $quantity New quantity
- * @param string|null $date Optional date for date-based inventory
- * @param string|null $time Optional time for time-based inventory
- * @return bool Success/Failure
- */
-public function update_square_inventory($product_id, $quantity, $date = null, $time = null) {
-    // 1. Find the corresponding Square Catalog Item Variation ID based on WC product ID, date, and time.
-    $mapping = $this->product_mappings->get_product_mappings($product_id, $date, $time);
-    $square_variation_id = isset($mapping['square_id']) ? $mapping['square_id'] : null;
-    
-    // 2. Check if a valid Square Variation ID was found. If not, log and exit.
-    if (!$square_variation_id) {
-        // Log only if needed, might be noisy if many products aren't mapped
-        // BRCC_Helpers::log_info(sprintf('Square Sync: No Square mapping found for WC Product ID %s%s%s. Cannot update Square inventory.', $product_id, $date ? ' date ' . $date : '', $time ? ' time ' . $time : ''));
-        return false; // No mapping found
-    }
-    
-    // 3. Prepare the request body for the Square Inventory API endpoint: /v2/inventory/batch-change
-    $idempotency_key = uniqid('brcc_sync_', true); // Important for preventing duplicate updates
-    $changes = array(
-        array(
-            'type' => 'PHYSICAL_COUNT', // Or 'ADJUSTMENT' depending on desired logic
-            'physical_count' => array(
-                'catalog_object_id' => $square_variation_id,
-                'state' => 'IN_STOCK', // Assuming we're setting in-stock quantity
-                'location_id' => $this->location_id,
-                'quantity' => (string)$quantity, // Quantity must be a string
-                'occurred_at' => gmdate("Y-m-d\TH:i:s\Z"), // Current UTC time
-            )
-        )
-    );
-    
-    $request_body = array(
-        'idempotency_key' => $idempotency_key,
-        'changes' => $changes,
-        'ignore_unchanged_counts' => true // Optional: set to false if you want updates even if quantity is the same
-    );
-    
-    // 4. Call the Square API using $this->call_square_api().
-    $response = $this->call_square_api('/inventory/batch-change', 'POST', $request_body);
-    
-    if (is_wp_error($response)) {
-        BRCC_Helpers::log_error(sprintf('Square Sync Error: Failed to update inventory for Variation ID %s. Error: %s', $square_variation_id, $response->get_error_message()));
-        return false; // Return false on WP_Error
-    }
-    
-    // Check for errors within the Square response body
-    if (!empty($response['errors'])) {
-        $error_details = json_encode($response['errors']);
-        BRCC_Helpers::log_error(sprintf('Square Sync Error: API returned errors for Variation ID %s. Details: %s', $square_variation_id, $error_details));
-        return false; // Return false if Square reported errors
-    }
-    
-    // If successful, log operation and return true
-    $log_details = sprintf(
-        __('Successfully updated Square inventory for Variation ID %s (linked to WC Product ID %d) to quantity %s.', 'brcc-inventory-tracker'),
-        $square_variation_id,
-        $product_id, // Include the WC Product ID for context
-        $quantity
-    );
-    BRCC_Helpers::log_operation('Square Sync', 'Update Inventory (from WC Sale)', $log_details); // Specify source
-    BRCC_Helpers::log_info(sprintf('Square Sync Success: Updated inventory for Variation ID %s to quantity %d.', $square_variation_id, $quantity)); // Keep existing info log
-    return true;
-}
+// Function update_square_inventory() removed entirely as per user request (2025-04-26).
+// Square inventory should never be modified by this plugin.
 
 /**
  * Import a batch of historical Square orders

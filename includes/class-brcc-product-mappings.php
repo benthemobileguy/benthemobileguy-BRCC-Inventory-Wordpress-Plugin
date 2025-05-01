@@ -68,16 +68,13 @@ class BRCC_Product_Mappings
             error_log("DEBUG: Found exact date+time mapping for {$date_time_key}: " . print_r($mapping, true));
             
             // Ensure ticket_class_id is properly set in the returned data, prioritizing manual
+            // Prioritize manual_eventbrite_id for ticket_class_id
             if (!isset($mapping['ticket_class_id']) || empty($mapping['ticket_class_id'])) {
-                $mapping['ticket_class_id'] = isset($mapping['manual_eventbrite_id']) && !empty($mapping['manual_eventbrite_id'])
-                    ? $mapping['manual_eventbrite_id']
-                    : (isset($mapping['eventbrite_id']) ? $mapping['eventbrite_id'] : '');
+                $mapping['ticket_class_id'] = isset($mapping['manual_eventbrite_id']) ? $mapping['manual_eventbrite_id'] : '';
             }
             // Ensure manual_eventbrite_id is also set if missing but ticket_class_id exists
              if (!isset($mapping['manual_eventbrite_id']) || empty($mapping['manual_eventbrite_id'])) {
-                $mapping['manual_eventbrite_id'] = isset($mapping['ticket_class_id']) && !empty($mapping['ticket_class_id'])
-                    ? $mapping['ticket_class_id']
-                    : (isset($mapping['eventbrite_id']) ? $mapping['eventbrite_id'] : '');
+                $mapping['manual_eventbrite_id'] = isset($mapping['ticket_class_id']) ? $mapping['ticket_class_id'] : '';
             }
             
             return $mapping;
@@ -94,16 +91,13 @@ class BRCC_Product_Mappings
                     if (BRCC_Helpers::is_time_close($time, $stored_time)) {
                         error_log("DEBUG: Found close date+time mapping for {$key} (requested {$time}): " . print_r($mapping_data, true));
                         // Ensure ticket_class_id is properly set
+                        // Prioritize manual_eventbrite_id for ticket_class_id
                         if (!isset($mapping_data['ticket_class_id']) || empty($mapping_data['ticket_class_id'])) {
-                            $mapping_data['ticket_class_id'] = isset($mapping_data['manual_eventbrite_id']) && !empty($mapping_data['manual_eventbrite_id'])
-                                ? $mapping_data['manual_eventbrite_id']
-                                : (isset($mapping_data['eventbrite_id']) ? $mapping_data['eventbrite_id'] : '');
+                            $mapping_data['ticket_class_id'] = isset($mapping_data['manual_eventbrite_id']) ? $mapping_data['manual_eventbrite_id'] : '';
                         }
                         // Ensure manual_eventbrite_id is also set
                         if (!isset($mapping_data['manual_eventbrite_id']) || empty($mapping_data['manual_eventbrite_id'])) {
-                            $mapping_data['manual_eventbrite_id'] = isset($mapping_data['ticket_class_id']) && !empty($mapping_data['ticket_class_id'])
-                                ? $mapping_data['ticket_class_id']
-                                : (isset($mapping_data['eventbrite_id']) ? $mapping_data['eventbrite_id'] : '');
+                            $mapping_data['manual_eventbrite_id'] = isset($mapping_data['ticket_class_id']) ? $mapping_data['ticket_class_id'] : '';
                         }
                         return $mapping_data; // Return the first close match
                     }
@@ -119,16 +113,13 @@ class BRCC_Product_Mappings
             error_log("DEBUG: Found date-only mapping for {$date}: " . print_r($mapping, true));
             
             // Ensure ticket_class_id is properly set in the returned data, prioritizing manual
+            // Prioritize manual_eventbrite_id for ticket_class_id
             if (!isset($mapping['ticket_class_id']) || empty($mapping['ticket_class_id'])) {
-                $mapping['ticket_class_id'] = isset($mapping['manual_eventbrite_id']) && !empty($mapping['manual_eventbrite_id'])
-                    ? $mapping['manual_eventbrite_id']
-                    : (isset($mapping['eventbrite_id']) ? $mapping['eventbrite_id'] : '');
+                $mapping['ticket_class_id'] = isset($mapping['manual_eventbrite_id']) ? $mapping['manual_eventbrite_id'] : '';
             }
              // Ensure manual_eventbrite_id is also set
             if (!isset($mapping['manual_eventbrite_id']) || empty($mapping['manual_eventbrite_id'])) {
-                $mapping['manual_eventbrite_id'] = isset($mapping['ticket_class_id']) && !empty($mapping['ticket_class_id'])
-                    ? $mapping['ticket_class_id']
-                    : (isset($mapping['eventbrite_id']) ? $mapping['eventbrite_id'] : '');
+                $mapping['manual_eventbrite_id'] = isset($mapping['ticket_class_id']) ? $mapping['ticket_class_id'] : '';
             }
             
             return $mapping;
@@ -138,20 +129,18 @@ class BRCC_Product_Mappings
         $default_mapping = isset($all_mappings[$product_id]) ? $all_mappings[$product_id] : array();
 
         // Ensure default mapping has expected keys, prioritizing manual_eventbrite_id
+        // Prioritize manual_eventbrite_id for ticket_class_id
         $default_mapping['ticket_class_id'] = isset($default_mapping['ticket_class_id']) && !empty($default_mapping['ticket_class_id'])
             ? $default_mapping['ticket_class_id']
-            : (isset($default_mapping['manual_eventbrite_id']) && !empty($default_mapping['manual_eventbrite_id'])
-                ? $default_mapping['manual_eventbrite_id']
-                : (isset($default_mapping['eventbrite_id']) ? $default_mapping['eventbrite_id'] : ''));
-        
+            : (isset($default_mapping['manual_eventbrite_id']) ? $default_mapping['manual_eventbrite_id'] : '');
+
+        // Ensure manual_eventbrite_id is set, falling back to ticket_class_id if necessary
         $default_mapping['manual_eventbrite_id'] = isset($default_mapping['manual_eventbrite_id']) && !empty($default_mapping['manual_eventbrite_id'])
             ? $default_mapping['manual_eventbrite_id']
-            : (isset($default_mapping['ticket_class_id']) && !empty($default_mapping['ticket_class_id'])
-                ? $default_mapping['ticket_class_id']
-                : (isset($default_mapping['eventbrite_id']) ? $default_mapping['eventbrite_id'] : ''));
+            : (isset($default_mapping['ticket_class_id']) ? $default_mapping['ticket_class_id'] : '');
 
         $default_mapping['square_id'] = isset($default_mapping['square_id']) ? $default_mapping['square_id'] : '';
-        $default_mapping['eventbrite_id'] = isset($default_mapping['eventbrite_id']) ? $default_mapping['eventbrite_id'] : $default_mapping['ticket_class_id']; // Ensure eventbrite_id exists for backward compat
+        // $default_mapping['eventbrite_id'] = isset($default_mapping['eventbrite_id']) ? $default_mapping['eventbrite_id'] : $default_mapping['ticket_class_id']; // REMOVED: Backward compat for eventbrite_id
 
         // Log fallback
         error_log("DEBUG: Using default mapping for product {$product_id}: " . print_r($default_mapping, true));
@@ -198,8 +187,8 @@ class BRCC_Product_Mappings
             // Check if this is a base product mapping with both eventbrite_id and eventbrite_event_id
             // Base mapping check (prioritize manual_eventbrite_id)
             if (is_numeric($product_id_key) && isset($mapping_data['eventbrite_event_id']) && !empty($mapping_data['eventbrite_event_id'])) {
-                if ((isset($mapping_data['manual_eventbrite_id']) && $mapping_data['manual_eventbrite_id'] === $ticket_class_id) ||
-                    (empty($mapping_data['manual_eventbrite_id']) && isset($mapping_data['eventbrite_id']) && $mapping_data['eventbrite_id'] === $ticket_class_id))
+                // Check only manual_eventbrite_id
+                if (isset($mapping_data['manual_eventbrite_id']) && $mapping_data['manual_eventbrite_id'] === $ticket_class_id)
                 {
                     BRCC_Helpers::log_info("Found Event ID {$mapping_data['eventbrite_event_id']} for Ticket ID {$ticket_class_id} in base product mapping");
                     return $mapping_data['eventbrite_event_id'];
@@ -214,8 +203,8 @@ class BRCC_Product_Mappings
                 foreach ($mapping_data as $date_key => $date_mapping) {
                     // Date-specific mapping check (prioritize manual_eventbrite_id)
                     if (isset($date_mapping['eventbrite_event_id']) && !empty($date_mapping['eventbrite_event_id'])) {
-                        if ((isset($date_mapping['manual_eventbrite_id']) && $date_mapping['manual_eventbrite_id'] === $ticket_class_id) ||
-                            (empty($date_mapping['manual_eventbrite_id']) && isset($date_mapping['eventbrite_id']) && $date_mapping['eventbrite_id'] === $ticket_class_id))
+                        // Check only manual_eventbrite_id
+                        if (isset($date_mapping['manual_eventbrite_id']) && $date_mapping['manual_eventbrite_id'] === $ticket_class_id)
                         {
                             BRCC_Helpers::log_info("Found Event ID {$date_mapping['eventbrite_event_id']} for Ticket ID {$ticket_class_id} in date-specific mapping");
                             return $date_mapping['eventbrite_event_id'];
@@ -348,8 +337,8 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
                         // Date+Time Exact Check (prioritize manual_eventbrite_id)
                         if (isset($mapping_data[$time_key])) {
                             $specific_mapping = $mapping_data[$time_key];
-                            if ((isset($specific_mapping['manual_eventbrite_id']) && $specific_mapping['manual_eventbrite_id'] == $ticket_class_id) ||
-                                (empty($specific_mapping['manual_eventbrite_id']) && isset($specific_mapping['eventbrite_id']) && $specific_mapping['eventbrite_id'] == $ticket_class_id))
+                            // Check only manual_eventbrite_id
+                            if (isset($specific_mapping['manual_eventbrite_id']) && $specific_mapping['manual_eventbrite_id'] == $ticket_class_id)
                             {
                                 BRCC_Helpers::log_info("Found exact date+time match: Product ID {$base_product_id} for Ticket ID {$ticket_class_id}");
                                 return $base_product_id;
@@ -362,8 +351,8 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
                                 $stored_time = substr($date_time_key, strlen($date) + 1);  // Extract time part
                                 // Date+Time Buffer Check (prioritize manual_eventbrite_id)
                                 if (BRCC_Helpers::is_time_close($time, $stored_time)) {
-                                    if ((isset($specific_mapping['manual_eventbrite_id']) && $specific_mapping['manual_eventbrite_id'] == $ticket_class_id) ||
-                                        (empty($specific_mapping['manual_eventbrite_id']) && isset($specific_mapping['eventbrite_id']) && $specific_mapping['eventbrite_id'] == $ticket_class_id))
+                                    // Check only manual_eventbrite_id
+                                    if (isset($specific_mapping['manual_eventbrite_id']) && $specific_mapping['manual_eventbrite_id'] == $ticket_class_id)
                                     {
                                         BRCC_Helpers::log_info("Found date+time (buffer) match: Product ID {$base_product_id} for Ticket ID {$ticket_class_id}");
                                         return $base_product_id;
@@ -377,8 +366,8 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
                     // Date Only Check (prioritize manual_eventbrite_id)
                     if (isset($mapping_data[$date])) {
                         $specific_mapping = $mapping_data[$date];
-                        if ((isset($specific_mapping['manual_eventbrite_id']) && $specific_mapping['manual_eventbrite_id'] == $ticket_class_id) ||
-                            (empty($specific_mapping['manual_eventbrite_id']) && isset($specific_mapping['eventbrite_id']) && $specific_mapping['eventbrite_id'] == $ticket_class_id))
+                        // Check only manual_eventbrite_id
+                        if (isset($specific_mapping['manual_eventbrite_id']) && $specific_mapping['manual_eventbrite_id'] == $ticket_class_id)
                         {
                             BRCC_Helpers::log_info("Found date-only match: Product ID {$base_product_id} for Ticket ID {$ticket_class_id}");
                             return $base_product_id;
@@ -394,8 +383,8 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
             if (is_numeric($product_id_key)) {
                 $product_id = (int) $product_id_key;
                 // Base Mapping Check (prioritize manual_eventbrite_id)
-                if ((isset($mapping_data['manual_eventbrite_id']) && $mapping_data['manual_eventbrite_id'] == $ticket_class_id) ||
-                    (empty($mapping_data['manual_eventbrite_id']) && isset($mapping_data['eventbrite_id']) && $mapping_data['eventbrite_id'] == $ticket_class_id))
+                // Check only manual_eventbrite_id
+                if (isset($mapping_data['manual_eventbrite_id']) && $mapping_data['manual_eventbrite_id'] == $ticket_class_id)
                 {
                     BRCC_Helpers::log_info("Found default mapping match: Product ID {$product_id} for Ticket ID {$ticket_class_id}");
                     return $product_id;
@@ -411,7 +400,7 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
      * Save product mapping with Square support
      * 
      * @param int $product_id Product ID
-     * @param array $mapping Mapping data (eventbrite_id, square_id)
+     * @param array $mapping Mapping data (manual_eventbrite_id, square_id, eventbrite_event_id)
      * @param string $date Optional event date in Y-m-d format
      * @param string $time Optional event time in H:i format
      * @return boolean Success or failure
@@ -428,9 +417,11 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
 
         if (!$date) {
             // Save default mapping (no date)
+            // This function seems deprecated or for simple mapping? Standardize keys anyway.
             $all_mappings[$product_id] = array(
-                'eventbrite_id' => sanitize_text_field($mapping['eventbrite_id']),
-                'square_id' => sanitize_text_field($mapping['square_id'])
+                'manual_eventbrite_id' => sanitize_text_field(isset($mapping['manual_eventbrite_id']) ? $mapping['manual_eventbrite_id'] : ''),
+                'eventbrite_event_id' => sanitize_text_field(isset($mapping['eventbrite_event_id']) ? $mapping['eventbrite_event_id'] : ''),
+                'square_id' => sanitize_text_field(isset($mapping['square_id']) ? $mapping['square_id'] : '')
             );
         } else {
             // Save date-specific mapping
@@ -441,12 +432,14 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
             // Use date+time as key if time is provided
             $key = $time ? $date . '_' . $time : $date;
 
+            // Standardize keys for date-specific mapping, prioritizing manual_eventbrite_id
+            $manual_id = sanitize_text_field(isset($mapping['manual_eventbrite_id']) ? $mapping['manual_eventbrite_id'] : '');
             $all_mappings[$product_id . '_dates'][$key] = array(
-                'eventbrite_ticket_class_id' => sanitize_text_field(isset($mapping['eventbrite_ticket_class_id'])
-                    ? $mapping['eventbrite_ticket_class_id']
-                    : (isset($mapping['eventbrite_id']) ? $mapping['eventbrite_id'] : '')),
-                'eventbrite_id' => sanitize_text_field(isset($mapping['eventbrite_id']) ? $mapping['eventbrite_id'] : ''), // Keep for backward compatibility
-                'square_id' => sanitize_text_field($mapping['square_id'])
+                'eventbrite_event_id' => sanitize_text_field(isset($mapping['eventbrite_event_id']) ? $mapping['eventbrite_event_id'] : ''), // Event ID
+                'ticket_class_id' => $manual_id, // Use manual_eventbrite_id value
+                'manual_eventbrite_id' => $manual_id, // Ensure manual_eventbrite_id is saved
+                'eventbrite_id' => $manual_id, // Keep backward compatibility using manual_eventbrite_id value
+                'square_id' => sanitize_text_field(isset($mapping['square_id']) ? $mapping['square_id'] : '')
             );
         }
 
@@ -577,10 +570,10 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
      * Get product event dates from Eventbrite with enhanced time support
      * 
      * @param int $product_id Product ID
-     * @param string $eventbrite_id Eventbrite ticket ID
+     * @param string $manual_eventbrite_id Eventbrite ticket class ID
      * @return array Event dates and inventory levels from Eventbrite
      */
-    public function get_product_dates_from_eventbrite($product_id, $eventbrite_id)
+    public function get_product_dates_from_eventbrite($product_id, $manual_eventbrite_id)
     {
         $dates = array();
 
@@ -617,7 +610,7 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
                 'formatted_time' => !empty($connection_test['event_time']) ?
                     date('g:i A', strtotime("1970-01-01 " . $connection_test['event_time'])) : '',
                 'inventory' => $connection_test['available'],
-                'eventbrite_id' => $eventbrite_id,
+                'manual_eventbrite_id' => $manual_eventbrite_id, // Return the ID used for the query
                 'eventbrite_event_id' => $connection_test['event_id'],
                 'eventbrite_name' => $connection_test['event_name'],
                 'eventbrite_venue' => $connection_test['venue_name'],
@@ -647,8 +640,14 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
      * @param string $date Date in Y-m-d format
      * @param string $time Time in H:i format
      * @return string Suggested Eventbrite ID or empty string
+     * Suggests potential Eventbrite Ticket Class IDs based on product, date, and time.
+     *
+     * @param int $product_id Product ID
+     * @param string $date Date string
+     * @param string|null $time Time string or null
+     * @return array Suggestions
      */
-    public function suggest_eventbrite_id($product_id, $date, $time = null)
+    public function suggest_eventbrite_ticket_class_id($product_id, $date, $time = null)
     {
         if (!class_exists('BRCC_Eventbrite_Integration')) {
             return '';
@@ -660,6 +659,7 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
         }
 
         $eventbrite = new BRCC_Eventbrite_Integration();
+        // Assuming suggest_eventbrite_ids_for_product suggests ticket class IDs
         $suggestions = $eventbrite->suggest_eventbrite_ids_for_product($product, $date, $time);
 
         // Return the top suggestion's ticket_id
@@ -1082,7 +1082,7 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
 
         // Get base Eventbrite ID for suggestions
         $base_mapping = isset($all_mappings[$product_id]) ? $all_mappings[$product_id] : array(
-            'eventbrite_id' => '',
+            'manual_eventbrite_id' => '', // Use standardized key
             'eventbrite_event_id' => '',
         );
         
@@ -1130,7 +1130,7 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
                 'formatted_time' => $formatted_time,
                 'inventory' => null, // Inventory is not stored in mapping
                 'eventbrite_event_id' => isset($mapping_data['eventbrite_event_id']) ? $mapping_data['eventbrite_event_id'] : '',
-                'eventbrite_id' => isset($mapping_data['eventbrite_id']) ? $mapping_data['eventbrite_id'] : '',
+                'manual_eventbrite_id' => isset($mapping_data['manual_eventbrite_id']) ? $mapping_data['manual_eventbrite_id'] : '', // Use standardized key
                 'square_id' => isset($mapping_data['square_id']) ? $mapping_data['square_id'] : '', // Add Square ID
                 'from_mappings' => true // Indicate this came from saved data
             );
@@ -1161,7 +1161,7 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
         $response_data = array(
             'dates' => $dates_to_display,
             'events' => $available_events,
-            'base_id' => $base_mapping['eventbrite_id'] ?? '',
+            'base_ticket_class_id' => $base_mapping['manual_eventbrite_id'] ?? '', // Use standardized key
             'base_event_id' => $base_mapping['eventbrite_event_id'] ?? '',
             'pagination' => array(
                 'current_page' => $page,
@@ -1205,7 +1205,7 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
         foreach ($mappings as $idx => $mapping) {
             error_log('DEBUG: Mapping ' . $idx . ' ticket class ID (manual_eventbrite_id): ' .
                 (isset($mapping['manual_eventbrite_id']) ? $mapping['manual_eventbrite_id'] : 'not set') .
-                ' | (eventbrite_ticket_class_id): ' .
+                // ' | (eventbrite_ticket_class_id): ' . // REMOVED old debug key
                 (isset($mapping['eventbrite_ticket_class_id']) ? $mapping['eventbrite_ticket_class_id'] : 'not set'));
         }
 
@@ -1267,14 +1267,20 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
             
             // Check for both possible keys, prioritizing the correct one
             // Assuming form might send 'manual_eventbrite_id' or 'eventbrite_ticket_class_id'
-            $ticket_class_id = isset($mapping['manual_eventbrite_id']) && !empty($mapping['manual_eventbrite_id'])
-                ? sanitize_text_field($mapping['manual_eventbrite_id'])
-                : (isset($mapping['eventbrite_ticket_class_id']) ? sanitize_text_field($mapping['eventbrite_ticket_class_id']) : '');
-            
-            // Fallback if the primary keys are empty but 'eventbrite_id' exists (old way)
-            if (empty($ticket_class_id) && isset($mapping['eventbrite_id'])) {
-                 $ticket_class_id = sanitize_text_field($mapping['eventbrite_id']);
+            // Check multiple possible sources for the ticket class ID, prioritizing manual_eventbrite_id
+            $ticket_class_id = '';
+            if (isset($mapping['manual_eventbrite_id']) && !empty($mapping['manual_eventbrite_id'])) {
+                $ticket_class_id = sanitize_text_field($mapping['manual_eventbrite_id']);
+            } elseif (isset($mapping['ticket_class_id']) && !empty($mapping['ticket_class_id'])) { // Check 'ticket_class_id' next
+                $ticket_class_id = sanitize_text_field($mapping['ticket_class_id']);
+            } elseif (isset($mapping['eventbrite_id']) && !empty($mapping['eventbrite_id'])) { // Fallback to 'eventbrite_id'
+                $ticket_class_id = sanitize_text_field($mapping['eventbrite_id']);
             }
+            
+            // REMOVED: Fallback if the primary keys are empty but 'eventbrite_id' exists (old way)
+            // if (empty($ticket_class_id) && isset($mapping['eventbrite_id'])) {
+            //      $ticket_class_id = sanitize_text_field($mapping['eventbrite_id']);
+            // }
 
             $square_id = isset($mapping['square_id']) ? sanitize_text_field($mapping['square_id']) : '';
 
@@ -1286,12 +1292,12 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
                 'eventbrite_event_id' => $event_id,
                 'manual_eventbrite_id' => $ticket_class_id, // Explicitly set this
                 'ticket_class_id' => $ticket_class_id,      // Also set this for consistency
-                'eventbrite_id' => $ticket_class_id,        // Keep backward compatibility
+                // 'eventbrite_id' => $ticket_class_id,        // REMOVED: Keep backward compatibility
                 'square_id' => $square_id
             );
 
             // Log exactly what we're saving for this specific entry
-            error_log("DEBUG: Preparing mapping for date_key {$date_key} with ticket_class_id: {$ticket_class_id}, manual_eventbrite_id: {$ticket_class_id}");
+            error_log("DEBUG: Preparing mapping for date_key {$date_key} with manual_eventbrite_id: {$ticket_class_id}");
 
             // Add time only if it exists
             if ($time) {
@@ -1351,19 +1357,19 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
             // Check specifically for the manual_eventbrite_id and ticket_class_id
             foreach ($verification[$product_id . '_dates'] as $date_key => $mapping) {
                 $manual_id = isset($mapping['manual_eventbrite_id']) ? $mapping['manual_eventbrite_id'] : 'NOT SET';
-                $ticket_id = isset($mapping['ticket_class_id']) ? $mapping['ticket_class_id'] : 'NOT SET';
-                $eventbrite_id = isset($mapping['eventbrite_id']) ? $mapping['eventbrite_id'] : 'NOT SET'; // Also check old key
-                
-                error_log("DEBUG: Verification for date_key {$date_key}: manual_eventbrite_id={$manual_id}, ticket_class_id={$ticket_id}, eventbrite_id={$eventbrite_id}");
+                $ticket_id = isset($mapping['ticket_class_id']) ? $mapping['ticket_class_id'] : 'NOT SET'; // Keep checking ticket_class_id for now
+                // $eventbrite_id = isset($mapping['eventbrite_id']) ? $mapping['eventbrite_id'] : 'NOT SET'; // REMOVED: Also check old key
+
+                error_log("DEBUG: Verification for date_key {$date_key}: manual_eventbrite_id={$manual_id}, ticket_class_id={$ticket_id}"); // Removed eventbrite_id from log
             }
             
             // Check specifically for the manual_eventbrite_id and ticket_class_id
             foreach ($verification[$product_id . '_dates'] as $date_key => $mapping) {
                 $manual_id = isset($mapping['manual_eventbrite_id']) ? $mapping['manual_eventbrite_id'] : 'NOT SET';
-                $ticket_id = isset($mapping['ticket_class_id']) ? $mapping['ticket_class_id'] : 'NOT SET';
-                $eventbrite_id = isset($mapping['eventbrite_id']) ? $mapping['eventbrite_id'] : 'NOT SET'; // Also check old key
-                
-                error_log("DEBUG: Verification for date_key {$date_key}: manual_eventbrite_id={$manual_id}, ticket_class_id={$ticket_id}, eventbrite_id={$eventbrite_id}");
+                $ticket_id = isset($mapping['ticket_class_id']) ? $mapping['ticket_class_id'] : 'NOT SET'; // Keep checking ticket_class_id for now
+                // $eventbrite_id = isset($mapping['eventbrite_id']) ? $mapping['eventbrite_id'] : 'NOT SET'; // REMOVED: Also check old key
+
+                error_log("DEBUG: Verification for date_key {$date_key}: manual_eventbrite_id={$manual_id}, ticket_class_id={$ticket_id}"); // Removed eventbrite_id from log
             }
         } else {
              error_log('DEBUG: Verification: No date mappings found for product ' . $product_id . ' after update.');
@@ -1401,8 +1407,11 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
         $product_id = isset($_POST['product_id']) ? absint($_POST['product_id']) : 0;
         $date = isset($_POST['date']) ? sanitize_text_field($_POST['date']) : '';
         $time = isset($_POST['time']) ? sanitize_text_field($_POST['time']) : '';
-        // Get IDs from POST - mapping matches the refactored JS
-        $ticket_class_id = isset($_POST['eventbrite_id']) ? sanitize_text_field($_POST['eventbrite_id']) : '';
+        // Get IDs from POST - expecting standardized keys now
+        // Ensure we're checking for different possible key names from POST data
+        $ticket_class_id = isset($_POST['manual_eventbrite_id']) && !empty($_POST['manual_eventbrite_id']) ? sanitize_text_field($_POST['manual_eventbrite_id']) :
+                        (isset($_POST['ticket_class_id']) && !empty($_POST['ticket_class_id']) ? sanitize_text_field($_POST['ticket_class_id']) :
+                        (isset($_POST['eventbrite_id']) && !empty($_POST['eventbrite_id']) ? sanitize_text_field($_POST['eventbrite_id']) : ''));
         $event_id = isset($_POST['eventbrite_event_id']) ? sanitize_text_field($_POST['eventbrite_event_id']) : '';
 
         if (empty($product_id)) {
@@ -1507,3 +1516,4 @@ public function find_product_id_for_event($ticket_class_id = null, $date = null,
         return $times;
     }
 }
+

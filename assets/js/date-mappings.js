@@ -4,14 +4,387 @@
  * This script manages date-specific product mappings between WooCommerce, 
  * Eventbrite, and Square in the admin interface.
  */
+
+// --- Helper Functions (Defined outside document.ready) ---
+
+/**
+ * Get the correct WordPress nonce from available sources
+ * @return {string} The nonce value
+ */
+function getCorrectNonce() {
+    // Try brcc_admin object first (most reliable)
+    if (typeof brcc_admin !== 'undefined' && brcc_admin.nonce) {
+        return brcc_admin.nonce;
+    }
+    
+    // Try finding a hidden nonce field in the DOM
+    var $nonceField = jQuery('input[name="brcc_nonce"], input[name="_wpnonce"], input[name="nonce"]').first();
+    if ($nonceField.length) {
+        return $nonceField.val();
+    }
+    
+    // Try data attribute as last resort
+    var $nonceElement = jQuery('[data-nonce]').first();
+    if ($nonceElement.length) {
+        return $nonceElement.attr('data-nonce');
+    }
+    
+    console.warn('Could not find a valid nonce!');
+    return '';
+}
+
+/**
+ * Initialize Select2/SelectWoo dropdowns
+ * @param {jQuery} $select - The select element to initialize
+ */
+function initializeSelectDropdowns($select) {
+    if (!$select || !$select.length) {
+        console.warn('initializeSelectDropdowns: No select element provided');
+        return;
+    }
+
+    // Custom matcher function to search by text OR id
+    function matchEventOption(params, data) {
+        // If there are no search terms, return all options
+        if (jQuery.trim(params.term) === '') {
+            return data;
+        }
+
+        // Skip if data isn't properly formed
+        if (typeof data.text === 'undefined' || typeof data.id === 'undefined') {
+            return null;
+        }
+
+        // Check if term is in text or id (case-insensitive)
+        var term = params.term.toLowerCase();
+        var text = data.text.toLowerCase();
+        var id = data.id.toString().toLowerCase(); // Ensure id is treated as string
+
+        if (text.indexOf(term) > -1 || id.indexOf(term) > -1) {
+            return data;
+        }
+
+        // Return null if no match is found
+        return null;
+    }
+    
+    try {
+        var selectOptions = {
+            width: '100%',
+            minimumResultsForSearch: 5,
+            dropdownAutoWidth: true,
+            matcher: matchEventOption // Use the custom matcher
+        };
+
+        if (typeof jQuery.fn.selectWoo === 'function') {
+            // Destroy existing instance first if it exists
+            if ($select.data('selectWoo')) $select.selectWoo('destroy');
+            $select.selectWoo(selectOptions);
+            return true;
+        } else if (typeof jQuery.fn.select2 === 'function') {
+            // Destroy existing instance first if it exists
+            if ($select.data('select2')) $select.select2('destroy');
+            $select.select2(selectOptions);
+            return true;
+        }
+    } catch(e) {
+        console.error('Select2/SelectWoo initialization failed:', e);
+    }
+    
+    return false; // Failed to initialize
+}
+
+/**
+ * Format time value with appropriate format
+ * @param {string} timeValue - Time value in HH:MM format
+ * @param {string} wpTimeFormat - WordPress time format
+ * @return {string} Formatted time string
+ */
+function formatTime(timeValue, wpTimeFormat) {
+    if (!timeValue) return '';
+    
+    try {
+        // Use moment.js if available for better formatting
+        if (typeof moment === 'function') {
+            return moment(timeValue, 'HH:mm').format(wpTimeFormat.replace(/g/g, 'h').replace(/a/g, 'A'));
+        }
+        
+        // Basic formatting fallback
+        var timeParts = timeValue.split(':');
+        var hour = parseInt(timeParts[0], 10);
+        var minute = timeParts[1] || '00';
+        var ampm = hour >= 12 ? 'PM' : 'AM';
+        hour = hour % 12;
+        hour = hour ? hour : 12; // Convert 0 to 12
+        return hour + ':' + minute + ' ' + ampm;
+    } catch(e) {
+        console.error('Time formatting error:', e);
+        return timeValue; // Return original as fallback
+    }
+}
+
+/**
+ * Show notification message
+ * @param {jQuery} $container - Container to show message in
+ * @param {string} message - Message text
+ * @param {string} type - Message type (success, error, warning, info)
+ * @param {number} duration - How long to show in ms (0 for permanent)
+ */
+function showNotification($container, message, type, duration) {
+    type = type || 'info';
+    duration = duration || 3000;
+    
+    var $message = jQuery('<div class="notice notice-' + type + ' inline" style="margin-top: 10px;"><p>' + message + '</p></div>');
+    
+    // Remove existing notifications
+    $container.find('.notice').remove();
+    $container.append($message);
+    
+    if (duration > 0) {
+        setTimeout(function() {
+            $message.fadeOut(function() { $message.remove(); });
+        }, duration);
+    }
+}
+
+/**
+ * Fetch Eventbrite events data and update dropdowns
+ * This can be called at any time to ensure we have the events data
+ */
+function fetchEventbriteEvents(callback) {
+    // Check if we already have events data in brcc_admin
+    if (typeof brcc_admin !== 'undefined' && 
+        typeof brcc_admin.eventbrite_events !== 'undefined' &&
+        Object.keys(brcc_admin.eventbrite_events).length > 0) {
+        console.log('Using existing Eventbrite events from brcc_admin');
+        if (typeof callback === 'function') {
+            callback(brcc_admin.eventbrite_events);
+        }
+        return;
+    }
+
+    // Otherwise, fetch via AJAX - ensure we pass the selected date parameter
+    jQuery.ajax({
+        url: brcc_admin.ajax_url,
+        type: 'POST',
+        dataType: 'json',
+        data: {
+            action: 'brcc_get_all_eventbrite_events_for_attendees', 
+            nonce: getCorrectNonce(),
+            selected_date: new Date().toISOString().split('T')[0] // Today's date in YYYY-MM-DD format
+        },
+        success: function(response) {
+            console.log('AJAX response (fetch_eventbrite_events):', response);
+
+            if (response.success && response.data && response.data.events) {
+                console.log('Fetched Eventbrite events:', response.data.events);
+
+                // Update the global events object if brcc_admin exists
+                if (typeof brcc_admin !== 'undefined') {
+                     brcc_admin.eventbrite_events = response.data.events;
+                } else {
+                     // Handle case where brcc_admin might not be defined yet? Unlikely here.
+                     window.brcc_admin = { eventbrite_events: response.data.events };
+                }
+
+                // Call the callback if provided
+                if (typeof callback === 'function') {
+                    callback(response.data.events);
+                }
+            } else {
+                console.error('Failed to fetch Eventbrite events:', response);
+                 // Ensure brcc_admin.eventbrite_events is at least an empty object
+                 if (typeof brcc_admin !== 'undefined') {
+                     brcc_admin.eventbrite_events = brcc_admin.eventbrite_events || {};
+                 } else {
+                      window.brcc_admin = { eventbrite_events: {} };
+                 }
+                 // Still call callback, but with empty object
+                 if (typeof callback === 'function') {
+                    callback({});
+                }
+            }
+        },
+        error: function(xhr, status, error) {
+            console.error('AJAX error fetching Eventbrite events:', status, error);
+            console.log('Response text:', xhr.responseText);
+             // Ensure brcc_admin.eventbrite_events is at least an empty object
+             if (typeof brcc_admin !== 'undefined') {
+                 brcc_admin.eventbrite_events = brcc_admin.eventbrite_events || {};
+             } else {
+                  window.brcc_admin = { eventbrite_events: {} };
+             }
+             // Still call callback, but with empty object
+             if (typeof callback === 'function') {
+                callback({});
+            }
+        }
+    });
+}
+
+/**
+ * Copy event options from main dropdown to date-specific dropdowns
+ * This function finds all the Eventbrite event options available in the main product
+ * mapping UI and copies them to the date-specific mapping dropdowns
+ */
+function copyEventOptionsFromMainDropdown() {
+    // Get Eventbrite event options from main product dropdown
+    var eventOptions = {};
+    var $mainEventDropdowns = jQuery('.brcc-eventbrite-event-id-select:visible');
+
+    if ($mainEventDropdowns.length > 0) {
+        console.log('Found main event dropdowns: ' + $mainEventDropdowns.length);
+        // Get options from the first main dropdown
+        $mainEventDropdowns.first().find('option').each(function() {
+            var $option = jQuery(this);
+            var value = $option.val();
+            var text = $option.text();
+
+            if (value) { // Skip empty values like "Select Event..."
+                eventOptions[value] = text;
+            }
+        });
+
+        if (Object.keys(eventOptions).length === 0) {
+            console.log('No event options found in main dropdown');
+            // Attempt to use global data if main dropdown is empty
+             if (typeof brcc_admin !== 'undefined' && brcc_admin.eventbrite_events && Object.keys(brcc_admin.eventbrite_events).length > 0) {
+                 eventOptions = brcc_admin.eventbrite_events;
+                 console.log('Using event options from brcc_admin object as fallback:', eventOptions);
+             } else {
+                 console.log('No event options found in main dropdown or brcc_admin.');
+                 return false; // Indicate failure
+             }
+        } else {
+            console.log('Found event options in main dropdown:', eventOptions);
+             // Ensure global data matches main dropdown if main dropdown is source
+             if (typeof brcc_admin !== 'undefined') {
+                 brcc_admin.eventbrite_events = eventOptions;
+             }
+        }
+
+    } else if (typeof brcc_admin !== 'undefined' && brcc_admin.eventbrite_events && Object.keys(brcc_admin.eventbrite_events).length > 0) {
+        // If main dropdown not found/visible, try getting events from brcc_admin object
+        eventOptions = brcc_admin.eventbrite_events;
+        console.log('Using event options from brcc_admin object (main dropdown not visible):', eventOptions);
+    } else {
+        console.log('No event sources found (main dropdown not visible and brcc_admin empty/missing)');
+        return false; // Indicate failure
+    }
+
+    // Store these options on all date content containers for potential use by 'Add New'
+    jQuery('.brcc-dates-content').each(function() {
+        jQuery(this).data('brcc-event-options', JSON.stringify(eventOptions));
+    });
+
+    // Update all visible date event dropdowns using the gathered options
+    jQuery('.brcc-date-event:visible').each(function() {
+        var $select = jQuery(this);
+        var currentValue = $select.val(); // Preserve current selection
+
+        // Clear existing options except first (placeholder)
+        $select.find('option:not(:first)').remove();
+
+        // Add new options
+        jQuery.each(eventOptions, function(id, name) {
+            var $option = jQuery('<option></option>')
+                .attr('value', id)
+                .text(name);
+
+            if (id == currentValue) { // Use == for potential type difference
+                $option.prop('selected', true);
+            }
+
+            $select.append($option);
+        });
+
+        // Reinitialize SelectWoo/Select2 using the helper function
+        initializeSelectDropdowns($select);
+    });
+
+    console.log('copyEventOptionsFromMainDropdown finished updating date dropdowns.');
+    return true; // Indicate success
+}
+
+/**
+ * Update date-specific Eventbrite event dropdowns with available events data
+ */
+function updateDateSpecificEventDropdowns() {
+    var eventOptions = (typeof brcc_admin !== 'undefined' && brcc_admin.eventbrite_events) ? brcc_admin.eventbrite_events : {};
+
+    // Skip if no events available
+    if (Object.keys(eventOptions).length === 0) {
+        console.log('No Eventbrite events available to populate dropdowns');
+        // Optionally add a disabled "No events" option
+         jQuery('.brcc-date-event:visible').each(function() {
+             var $select = jQuery(this);
+             var currentValue = $select.val();
+             $select.find('option:not(:first)').remove(); // Clear existing options except placeholder
+             $select.append('<option value="" disabled>No events found</option>');
+             initializeSelectDropdowns($select); // Reinitialize
+         });
+        return;
+    }
+
+    // Store options on all date content containers (might not be necessary if using global brcc_admin)
+    jQuery('.brcc-dates-content').each(function() {
+        jQuery(this).data('brcc-event-options', JSON.stringify(eventOptions));
+    });
+
+    // Update all visible date event dropdowns
+    jQuery('.brcc-date-event:visible').each(function() {
+        var $select = jQuery(this);
+        var currentValue = $select.val(); // Get current value before clearing
+
+        // Clear existing options except first (placeholder)
+        $select.find('option:not(:first)').remove();
+
+        // Add new options
+        jQuery.each(eventOptions, function(id, name) {
+            var $option = jQuery('<option></option>')
+                .attr('value', id)
+                .text(name);
+
+            // Check if this option's value matches the previously selected value
+            if (id == currentValue) { // Use == for potential type difference
+                $option.prop('selected', true); // Use prop for selected state
+            }
+
+            $select.append($option);
+        });
+
+        // Reinitialize SelectWoo/Select2
+        initializeSelectDropdowns($select); // Use the existing helper
+    });
+
+    console.log('Date-specific event dropdowns updated with Eventbrite data');
+}
+
+/**
+ * Initialize any existing datepickers on page load
+ */
+function initExistingDatepickers() {
+    try {
+        if (typeof jQuery.fn.datepicker === 'function') {
+            jQuery('.brcc-datepicker, .brcc-new-datepicker').datepicker({
+                dateFormat: 'yy-mm-dd',
+                changeMonth: true,
+                changeYear: true
+            });
+        }
+    } catch (e) {
+        console.error('Error initializing existing datepickers:', e);
+    }
+}
+
+// --- Document Ready ---
 jQuery(document).ready(function($) {
     // Prevent multiple initializations
     if (window.brccDateMappingsInitialized) {
         console.warn('date-mappings.js: Already initialized. Skipping.');
         return;
     }
-    window.brccDateMappingsInitialized = true;
-    
+
     console.log('date-mappings.js: Initialization started');
     
     // --- Configuration ---
@@ -36,124 +409,16 @@ jQuery(document).ready(function($) {
         brcc_admin.wp_time_format = brcc_admin.wp_time_format || 'g:i a';
     }
     
-    // --- Helper Functions ---
-    
-    /**
-     * Get the correct WordPress nonce from available sources
-     * @return {string} The nonce value
-     */
-    function getCorrectNonce() {
-        // Try brcc_admin object first (most reliable)
-        if (typeof brcc_admin !== 'undefined' && brcc_admin.nonce) {
-            return brcc_admin.nonce;
-        }
-        
-        // Try finding a hidden nonce field in the DOM
-        var $nonceField = $('input[name="brcc_nonce"], input[name="_wpnonce"], input[name="nonce"]').first();
-        if ($nonceField.length) {
-            return $nonceField.val();
-        }
-        
-        // Try data attribute as last resort
-        var $nonceElement = $('[data-nonce]').first();
-        if ($nonceElement.length) {
-            return $nonceElement.attr('data-nonce');
-        }
-        
-        console.warn('Could not find a valid nonce!');
-        return '';
+    // Ensure we have events data by fetching it if needed
+    if (typeof brcc_admin !== 'undefined' && 
+        (!brcc_admin.eventbrite_events || Object.keys(brcc_admin.eventbrite_events).length === 0)) {
+        console.log('date-mappings.js: No Eventbrite events found in brcc_admin, fetching now...');
+        fetchEventbriteEvents(function(eventbriteEvents) {
+            // After fetching, copy to date-specific dropdowns
+            copyEventOptionsFromMainDropdown(); // Use the copy function
+        });
     }
-    
-    /**
-     * Initialize Select2/SelectWoo dropdowns
-     * @param {jQuery} $select - The select element to initialize
-     */
-    function initializeSelectDropdowns($select) {
-        if (!$select || !$select.length) {
-            console.warn('initializeSelectDropdowns: No select element provided');
-            return;
-        }
-        
-        try {
-            if (typeof $.fn.selectWoo === 'function') {
-                // Destroy existing instance first if it exists
-                if ($select.data('selectWoo')) $select.selectWoo('destroy');
-                $select.selectWoo({ 
-                    width: '100%', 
-                    minimumResultsForSearch: 5,
-                    dropdownAutoWidth: true
-                });
-                return true;
-            } else if (typeof $.fn.select2 === 'function') {
-                // Destroy existing instance first if it exists
-                if ($select.data('select2')) $select.select2('destroy');
-                $select.select2({ 
-                    width: '100%', 
-                    minimumResultsForSearch: 5,
-                    dropdownAutoWidth: true
-                });
-                return true;
-            }
-        } catch(e) {
-            console.error('Select2/SelectWoo initialization failed:', e);
-        }
-        
-        return false; // Failed to initialize
-    }
-    
-    /**
-     * Format time value with appropriate format
-     * @param {string} timeValue - Time value in HH:MM format
-     * @param {string} wpTimeFormat - WordPress time format
-     * @return {string} Formatted time string
-     */
-    function formatTime(timeValue, wpTimeFormat) {
-        if (!timeValue) return '';
-        
-        try {
-            // Use moment.js if available for better formatting
-            if (typeof moment === 'function') {
-                return moment(timeValue, 'HH:mm').format(wpTimeFormat.replace(/g/g, 'h').replace(/a/g, 'A'));
-            }
-            
-            // Basic formatting fallback
-            var timeParts = timeValue.split(':');
-            var hour = parseInt(timeParts[0], 10);
-            var minute = timeParts[1] || '00';
-            var ampm = hour >= 12 ? 'PM' : 'AM';
-            hour = hour % 12;
-            hour = hour ? hour : 12; // Convert 0 to 12
-            return hour + ':' + minute + ' ' + ampm;
-        } catch(e) {
-            console.error('Time formatting error:', e);
-            return timeValue; // Return original as fallback
-        }
-    }
-    
-    /**
-     * Show notification message
-     * @param {jQuery} $container - Container to show message in
-     * @param {string} message - Message text
-     * @param {string} type - Message type (success, error, warning, info)
-     * @param {number} duration - How long to show in ms (0 for permanent)
-     */
-    function showNotification($container, message, type, duration) {
-        type = type || 'info';
-        duration = duration || 3000;
-        
-        var $message = $('<div class="notice notice-' + type + ' inline" style="margin-top: 10px;"><p>' + message + '</p></div>');
-        
-        // Remove existing notifications
-        $container.find('.notice').remove();
-        $container.append($message);
-        
-        if (duration > 0) {
-            setTimeout(function() {
-                $message.fadeOut(function() { $message.remove(); });
-            }, duration);
-        }
-    }
-    
+
     /**
      * Main function to render the date mappings interface
      * @param {jQuery} $container - Container to render content in
@@ -167,8 +432,10 @@ jQuery(document).ready(function($) {
         $container.empty();
         
         var dates = data.dates || [];
-        var eventOptions = data.events || {}; // Options for the dropdown
-        
+        // **Explicitly use the global brcc_admin.eventbrite_events**
+        var eventOptions = (typeof brcc_admin !== 'undefined' && brcc_admin.eventbrite_events) ? brcc_admin.eventbrite_events : {};
+        console.log('renderSimpleDateMappings: Using eventOptions:', eventOptions); // Add log
+
         var $content = $('<div class="brcc-dates-content"></div>');
         // Store event options data on the container for later use by 'Add New' button
         $content.data('brcc-event-options', JSON.stringify(eventOptions));
@@ -202,23 +469,57 @@ jQuery(document).ready(function($) {
                 // --- Eventbrite Column ---
                 var $eventbriteCell = $('<td></td>');
                 
-                // Event dropdown
-                var $eventSelect = $('<select class="brcc-date-event" name="date_event[' + date_data.date + ']"></select>');
+                // Event dropdown - Use eventbrite_event_id as the name attribute
+                var $eventSelect = $('<select class="brcc-date-event" name="eventbrite_event_id[' + date_data.date + ']"></select>');
                 $eventSelect.append('<option value="">Select Event</option>');
-                
-                // Populate dropdown options
-                $.each(eventOptions, function(id, name) {
-                    var selected = (id == date_data.eventbrite_event_id) ? ' selected' : '';
-                    $eventSelect.append('<option value="' + id + '"' + selected + '>' + name + '</option>');
-                });
+
+                // Populate dropdown options using the correct eventOptions variable
+                if (Object.keys(eventOptions).length > 0) {
+                    $.each(eventOptions, function(id, name) {
+                        // Ensure name is a usable string, provide fallback
+                        var displayName = (typeof name === 'string' && name.trim() !== '') ? name.trim() : 'Unnamed Event';
+                        if (typeof name !== 'string' || name.trim() === '') {
+                            console.warn(`Event name for ID ${id} is invalid or empty:`, name);
+                        }
+                        // Combine name and ID for display
+                        var optionText = `${displayName} (ID: ${id})`;
+                        var selected = (id == date_data.eventbrite_event_id) ? ' selected' : ''; // Use == for potential type difference
+                        $eventSelect.append('<option value="' + id + '"' + selected + '>' + optionText + '</option>');
+                    });
+                } else {
+                     console.warn('renderSimpleDateMappings: No eventOptions available to populate dropdown for date:', date_data.date);
+                     // Optionally add a disabled option indicating no events loaded
+                     $eventSelect.append('<option value="" disabled>Could not load events</option>');
+                }
                 $eventbriteCell.append($eventSelect);
+
+                // Ticket ID input - This is the key part we need to fix
+                // Try all possible sources of the ticket class ID for maximum compatibility
+                var ticketIdValue = '';
                 
-                // Ticket ID input
-                // Use eventbrite_ticket_class_id for the value of the manual input field
-                // Use the correct key 'eventbrite_id' from the data sent by PHP
-                var $ticketIdInput = $('<input type="text" class="brcc-manual-event-id" name="ticket_id[' + date_data.date + ']" value="' + (date_data.eventbrite_id || '') + '" placeholder="Enter Ticket Class ID" style="width: 100%; margin-top: 5px;">');
+                // Log all possible sources for debugging
+                console.log('Ticket class ID sources for date ' + date_data.date + ':', {
+                    'ticket_class_id': date_data.ticket_class_id,
+                    'manual_eventbrite_id': date_data.manual_eventbrite_id,
+                    'eventbrite_id': date_data.eventbrite_id
+                });
+                
+                // Check each possible key in order of preference
+                if (date_data.ticket_class_id) {
+                    ticketIdValue = date_data.ticket_class_id;
+                    console.log('Using ticket_class_id for ' + date_data.date + ':', ticketIdValue);
+                } else if (date_data.manual_eventbrite_id) {
+                    ticketIdValue = date_data.manual_eventbrite_id;
+                    console.log('Using manual_eventbrite_id for ' + date_data.date + ':', ticketIdValue);
+                } else if (date_data.eventbrite_id) {
+                    ticketIdValue = date_data.eventbrite_id;
+                    console.log('Using eventbrite_id for ' + date_data.date + ':', ticketIdValue);
+                }
+                
+                // The input field's NAME attribute remains 'manual_eventbrite_id' because PHP expects it from that POST key on save
+                var $ticketIdInput = $('<input type="text" class="brcc-manual-event-id" name="manual_eventbrite_id[' + date_data.date + ']" value="' + ticketIdValue + '" placeholder="Enter Ticket Class ID" style="width: 100%; margin-top: 5px;">');
                 $eventbriteCell.append($ticketIdInput);
-                
+
                 $row.append($eventbriteCell);
                 
                 // --- Square Column ---
@@ -259,17 +560,22 @@ jQuery(document).ready(function($) {
         $content.append($table); // Table added second
         $container.append($content);
         
-        // Initialize select dropdowns after rendering
-        setTimeout(function() {
-            $container.find('.brcc-date-event').each(function() {
-                initializeSelectDropdowns($(this));
-            });
-        }, 100);
+        // Select2/SelectWoo initialization is now handled by the ajaxComplete handler in admin.js
+        // after this rendering function completes.
         
         console.log('renderSimpleDateMappings: Rendering complete');
     };
-    
+
     // --- Event Handlers ---
+
+    // Initialize the select2/selectWoo fields on page load for consistency
+    setTimeout(function() {
+        // Fetch Eventbrite events and populate all dropdowns on page load
+        fetchEventbriteEvents(function(eventbriteEvents) {
+            // After fetching, copy to date-specific dropdowns
+            copyEventOptionsFromMainDropdown(); // Use the copy function
+        });
+    }, 500);
     
     // Remove potentially conflicting handlers first
     $(document).off('click', '.brcc-manage-dates');
@@ -300,6 +606,9 @@ jQuery(document).ready(function($) {
             } else {
                 $expandedRow.show();
                 $button.text('Hide Dates');
+
+                // Add this line to ensure event dropdowns are populated when showing existing row
+                updateDateSpecificEventDropdowns(); // Use the correct update function
             }
             return;
         }
@@ -337,6 +646,9 @@ jQuery(document).ready(function($) {
                     // Use the globally defined render function
                     window.renderSimpleDateMappings($cell, productId, response.data);
                     $button.text('Hide Dates').prop('disabled', false);
+
+                    // Update dropdowns with event data
+                    updateDateSpecificEventDropdowns(); // Use the correct update function
                 } else {
                     var errorMsg = (response && response.data && response.data.message) ? 
                         response.data.message : 'Error loading date mappings.';
@@ -463,7 +775,7 @@ jQuery(document).ready(function($) {
         $squareCell.append($squareIdInput);
         
         // --- Actions Cell ---
-        var $actionsCell = $('<td></td>');
+        var       $actionsCell = $('<td></td>');
         var $addButton = $('<button type="button" class="button button-primary brcc-confirm-add-date">Add</button>');
         var $cancelButton = $('<button type="button" class="button brcc-cancel-add-date" style="margin-left: 5px;">Cancel</button>');
         $actionsCell.append($addButton).append($cancelButton);
@@ -640,14 +952,17 @@ jQuery(document).ready(function($) {
             var manualTicketId = $row.find('input.brcc-manual-event-id').val() || '';
             var squareId = $row.find('.brcc-square-id').val() || '';
             
-            // Include mapping if date is present and at least one ID has a value
-            // Include mapping if date is present and at least one ID has a value
+            // Only include the mapping if at least one ID is provided
             if (date && (eventId || manualTicketId || squareId)) {
-                console.log('Collected Manual Ticket ID for date ' + date + ':', manualTicketId); // Log the manual ID
+                console.log('Collecting Ticket Class ID for date ' + date + ':', manualTicketId); // Log for troubleshooting
+                
                 var mappingData = {
                     date: date,
-                    eventbrite_event_id: eventId, // Event ID from dropdown
-                    manual_eventbrite_id: manualTicketId, // Manual Ticket ID from input
+                    eventbrite_event_id: eventId,
+                    // Send with ALL possible key names for maximum compatibility
+                    manual_eventbrite_id: manualTicketId,
+                    ticket_class_id: manualTicketId,
+                    eventbrite_id: manualTicketId,
                     square_id: squareId
                 };
                 
@@ -715,7 +1030,7 @@ jQuery(document).ready(function($) {
             }
         });
     });
-    
+   
     /**
      * Remove date button handler
      */
@@ -741,7 +1056,7 @@ jQuery(document).ready(function($) {
             });
         }
     });
-    
+   
     /**
      * Test mapping button handler
      */
@@ -780,8 +1095,8 @@ jQuery(document).ready(function($) {
                 product_id: productId,
                 date: date,
                 time: time,
-                eventbrite_event_id: eventId,
-                eventbrite_id: ticketId
+                eventbrite_event_id: eventId, // Event ID is correct
+                manual_eventbrite_id: ticketId // Send ticket ID using the primary key name for consistency
             },
             success: function(response) {
                 console.log('Test response:', response);
@@ -824,28 +1139,20 @@ jQuery(document).ready(function($) {
             }
         });
     });
-    
+   
     // --- Initialize UI Elements on Page Load ---
-    
-    /**
-     * Initialize any existing datepickers on page load
-     */
-    function initExistingDatepickers() {
-        try {
-            if (typeof $.fn.datepicker === 'function') {
-                $('.brcc-datepicker, .brcc-new-datepicker').datepicker({
-                    dateFormat: 'yy-mm-dd',
-                    changeMonth: true,
-                    changeYear: true
-                });
-            }
-        } catch (e) {
-            console.error('Error initializing existing datepickers:', e);
-        }
-    }
-    
+   
     // Run initialization
     initExistingDatepickers();
-    
+
+    // Initialize the select2/selectWoo fields on page load for consistency
+    setTimeout(function() {
+        // Initialize event dropdowns in the main product mapping table
+        $('.brcc-eventbrite-event-id-select').each(function() {
+            initializeSelectDropdowns($(this));
+        });
+    }, 500);
+   
     console.log('date-mappings.js: Initialization complete');
-});
+    window.brccDateMappingsInitialized = true; // Set flag after successful initialization
+}); // End of jQuery(document).ready()

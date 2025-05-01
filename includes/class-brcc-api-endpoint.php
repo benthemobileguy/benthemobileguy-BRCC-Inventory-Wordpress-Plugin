@@ -104,6 +104,16 @@ class BRCC_API_Endpoint
                     // Get mapping for this product and date
                     $mapping = $this->product_mappings->get_product_mappings($product_id, $date);
 
+                    // Get ticket class ID from all possible keys
+                    $ticket_class_id = '';
+                    if (isset($mapping['manual_eventbrite_id']) && !empty($mapping['manual_eventbrite_id'])) {
+                        $ticket_class_id = $mapping['manual_eventbrite_id'];
+                    } elseif (isset($mapping['ticket_class_id']) && !empty($mapping['ticket_class_id'])) {
+                        $ticket_class_id = $mapping['ticket_class_id'];
+                    } elseif (isset($mapping['eventbrite_id']) && !empty($mapping['eventbrite_id'])) {
+                        $ticket_class_id = $mapping['eventbrite_id'];
+                    }
+
                     $inventory[] = array(
                         'id' => $product_id,
                         'name' => $product->get_name(),
@@ -111,7 +121,11 @@ class BRCC_API_Endpoint
                         'date' => $date,
                         'formatted_date' => date_i18n(get_option('date_format'), strtotime($date)),
                         'stock' => $inventory_level,
-                        'eventbrite_id' => isset($mapping['eventbrite_id']) ? $mapping['eventbrite_id'] : '',
+                        // Return ticket class ID under all key names for maximum compatibility
+                        'manual_eventbrite_id' => $ticket_class_id,
+                        'ticket_class_id' => $ticket_class_id,
+                        'eventbrite_id' => $ticket_class_id, // For backward compatibility with API consumers
+                        'eventbrite_event_id' => isset($mapping['eventbrite_event_id']) ? $mapping['eventbrite_event_id'] : '',
                         'square_id' => isset($mapping['square_id']) ? $mapping['square_id'] : '',
                     );
                 }
@@ -130,7 +144,23 @@ class BRCC_API_Endpoint
                 $mapping = $this->product_mappings->get_product_mappings($product_id);
 
                 if (!empty($mapping)) {
-                    $product_data['eventbrite_id'] = isset($mapping['eventbrite_id']) ? $mapping['eventbrite_id'] : '';
+                    // Get ticket class ID from all possible keys
+                    $ticket_class_id = '';
+                    if (isset($mapping['manual_eventbrite_id']) && !empty($mapping['manual_eventbrite_id'])) {
+                        $ticket_class_id = $mapping['manual_eventbrite_id'];
+                    } elseif (isset($mapping['ticket_class_id']) && !empty($mapping['ticket_class_id'])) {
+                        $ticket_class_id = $mapping['ticket_class_id'];
+                    } elseif (isset($mapping['eventbrite_id']) && !empty($mapping['eventbrite_id'])) {
+                        $ticket_class_id = $mapping['eventbrite_id'];
+                    }
+
+                    // Return ticket class ID under all key names for maximum compatibility
+                    $product_data['manual_eventbrite_id'] = $ticket_class_id;
+                    $product_data['ticket_class_id'] = $ticket_class_id;
+                    $product_data['eventbrite_id'] = $ticket_class_id; // For backward compatibility
+                    
+                    // Other mapping data
+                    $product_data['eventbrite_event_id'] = isset($mapping['eventbrite_event_id']) ? $mapping['eventbrite_event_id'] : '';
                     $product_data['square_id'] = isset($mapping['square_id']) ? $mapping['square_id'] : '';
                 }
 

@@ -2,6 +2,27 @@
  * BRCC Inventory Tracker Admin Styles
  */
 
+/* Button icon animations */
+@keyframes brcc-spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.brcc-spin {
+    animation: brcc-spin 1.5s linear infinite;
+    display: inline-block;
+}
+
+/* Improved button styling */
+.button .dashicons {
+    vertical-align: middle;
+    margin-top: -3px;
+    margin-right: 4px;
+    font-size: 16px;
+    height: 16px;
+    width: 16px;
+}
+
 /* General styles */
 .brcc-wrap {
     margin: 20px 0;
@@ -1340,4 +1361,376 @@ input[type="date"]:focus {
     color: #777;
     font-size: 12px;
     font-family: monospace;
+}
+/* ==========================================================================
+   Daily Sales Page Styles
+   ========================================================================== */
+
+.brcc-daily-sales-wrap .brcc-page-header-container {
+    margin-bottom: 20px;
+}
+
+.brcc-daily-sales-wrap .brcc-page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px;
+    background-color: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px 4px 0 0;
+    box-shadow: 0 1px 1px rgba(0,0,0,.04);
+    margin-bottom: 0;
+}
+
+.brcc-daily-sales-wrap .brcc-comparison-row {
+    background-color: #f8f9fa;
+    border: 1px solid #ccd0d4;
+    border-top: none;
+    padding: 10px 15px;
+    border-radius: 0 0 4px 4px;
+    box-shadow: 0 1px 1px rgba(0,0,0,.04);
+}
+
+.brcc-daily-sales-wrap .brcc-date-selector {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.brcc-daily-sales-wrap .brcc-page-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.brcc-daily-sales-wrap .brcc-action-buttons {
+    display: flex;
+    gap: 8px;
+}
+
+.brcc-daily-sales-wrap .brcc-comparison-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.brcc-daily-sales-wrap .brcc-comparison-selector label {
+    font-weight: 600;
+    color: #23282d;
+}
+
+.brcc-daily-sales-wrap .brcc-page-actions .button .dashicons {
+    margin-right: 4px;
+    vertical-align: middle;
+    margin-top: -2px;
+}
+
+/* Use dashboard grid for charts */
+.brcc-daily-sales-wrap .brcc-charts-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); /* Responsive columns */
+    gap: 20px;
+    margin-bottom: 20px;
+}
+
+.brcc-daily-sales-wrap .brcc-dashboard-card {
+    margin-bottom: 20px; /* Add consistent spacing */
+}
+
+.brcc-daily-sales-wrap .brcc-card-header h2 .dashicons {
+    margin-right: 8px;
+    color: #50575e; /* Match icon color */
+}
+
+.brcc-daily-sales-wrap .brcc-sales-by-source-card .brcc-card-content,
+.brcc-daily-sales-wrap .brcc-sales-by-hour-card .brcc-card-content {
+    position: relative;
+    height: 300px; /* Give charts a fixed height */
+}
+
+/* Refine Sales Details Table */
+.brcc-sales-details-table th.column-time,
+.brcc-sales-details-table td.column-time {
+    width: 15%;
+}
+.brcc-sales-details-table th.column-product,
+.brcc-sales-details-table td.column-product {
+    width: 40%;
+}
+.brcc-sales-details-table th.column-quantity,
+.brcc-sales-details-table td.column-quantity {
+    width: 10%;
+    text-align: center;
+}
+.brcc-sales-details-table th.column-revenue,
+.brcc-sales-details-table td.column-revenue {
+    width: 15%;
+    text-align: right;
+}
+.brcc-sales-details-table th.column-source,
+.brcc-sales-details-table td.column-source {
+    width: 20%;
+    text-align: center;
+}
+
+.brcc-sales-details-table td.column-product a {
+    font-weight: 500;
+    text-decoration: none;
+    color: #007cba;
+}
+.brcc-sales-details-table td.column-product a:hover {
+    color: #005a87;
+    text-decoration: underline;
+}
+
+/* Source Badges (assuming these exist from dashboard CSS) */
+.brcc-source-badge {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: #fff;
+    background-color: #999; /* Default */
+}
+
+.brcc-source-badge.brcc-source-woocommerce { background-color: #96588a; }
+.brcc-source-badge.brcc-source-eventbrite { background-color: #f05537; }
+.brcc-source-badge.brcc-source-square { background-color: #006aff; }
+.brcc-source-badge.brcc-source-manual { background-color: #777; }
+.brcc-source-badge.brcc-source-unknown { background-color: #aaa; }
+
+/* Empty state styling */
+.brcc-daily-sales-wrap .brcc-empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: #555;
+}
+.brcc-daily-sales-wrap .brcc-empty-state .dashicons {
+    font-size: 48px;
+    width: 48px;
+    height: 48px;
+    color: #a0a5aa;
+    margin-bottom: 15px;
+}
+.brcc-daily-sales-wrap .brcc-empty-state p {
+    font-size: 1.1em;
+    margin: 0 0 10px 0;
+}
+
+/* Enhanced Daily Sales Page Styles */
+.brcc-daily-sales-wrap .brcc-page-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 10px;
+}
+
+.brcc-daily-sales-wrap .brcc-action-buttons {
+    display: flex;
+    gap: 8px;
+}
+
+.brcc-daily-sales-wrap .brcc-comparison-selector {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.brcc-daily-sales-wrap .brcc-comparison-selector label {
+    font-weight: 500;
+    color: #50575e;
+}
+
+.brcc-daily-sales-wrap .brcc-comparison-select {
+    min-width: 180px;
+}
+
+.brcc-daily-sales-wrap .brcc-dashboard-card {
+    background-color: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    box-shadow: 0 1px 1px rgba(0,0,0,.04);
+    overflow: hidden;
+}
+
+.brcc-daily-sales-wrap .brcc-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 15px;
+    border-bottom: 1px solid #eee;
+    background-color: #f8f9fa;
+}
+
+.brcc-daily-sales-wrap .brcc-card-header h2 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: #23282d;
+    display: flex;
+    align-items: center;
+}
+
+.brcc-daily-sales-wrap .brcc-card-actions {
+    display: flex;
+    gap: 5px;
+}
+
+.brcc-daily-sales-wrap .brcc-card-refresh {
+    background: none;
+    border: none;
+    color: #72777c;
+    cursor: pointer;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.brcc-daily-sales-wrap .brcc-card-refresh:hover {
+    background-color: #f0f0f1;
+    color: #007cba;
+}
+
+.brcc-daily-sales-wrap .brcc-card-content {
+    padding: 15px;
+}
+
+.brcc-daily-sales-wrap .brcc-sales-by-category-card .brcc-card-content,
+.brcc-daily-sales-wrap .brcc-comparison-card .brcc-card-content {
+    position: relative;
+    height: 300px; /* Give charts a fixed height */
+}
+
+/* Table filters */
+.brcc-daily-sales-wrap .brcc-table-filters {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    padding: 10px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+    border: 1px solid #eee;
+}
+
+.brcc-daily-sales-wrap .brcc-search-box {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    position: relative;
+    flex: 1;
+    max-width: 300px;
+}
+
+.brcc-daily-sales-wrap .brcc-search-box input {
+    padding-right: 30px;
+}
+
+.brcc-daily-sales-wrap .brcc-search-box button {
+    position: absolute;
+    right: 0;
+    top: 0;
+    background: none;
+    border: none;
+    color: #72777c;
+    cursor: pointer;
+    padding: 5px;
+    height: 100%;
+}
+
+.brcc-daily-sales-wrap .brcc-filter-controls {
+    display: flex;
+    gap: 10px;
+}
+
+.brcc-daily-sales-wrap .brcc-filter-select,
+.brcc-daily-sales-wrap .brcc-comparison-select {
+    min-width: 150px;
+    transition: all 0.2s ease;
+}
+
+/* Active state for dropdowns */
+.brcc-dropdown-active {
+    border-color: #007cba !important;
+    box-shadow: 0 0 0 1px #007cba !important;
+    outline: 2px solid transparent !important;
+}
+
+/* Loading state */
+.brcc-daily-sales-wrap .brcc-loading {
+    text-align: center;
+    padding: 30px;
+    color: #333;
+    background-color: #f8f9fa;
+    border: 1px solid #eee;
+    border-radius: 4px;
+    margin: 20px 0;
+    font-size: 14px;
+}
+
+.brcc-daily-sales-wrap .brcc-loading .dashicons {
+    font-size: 24px;
+    width: 24px;
+    height: 24px;
+    margin-right: 10px;
+    vertical-align: middle;
+}
+
+.brcc-daily-sales-wrap .brcc-error-message {
+    text-align: center;
+    padding: 20px;
+    color: #d63638;
+}
+
+/* Print styles */
+@media print {
+    #adminmenumain,
+    #wpadminbar,
+    .brcc-page-actions,
+    .brcc-card-actions,
+    .brcc-table-filters,
+    #wpfooter {
+        display: none !important;
+    }
+    
+    #wpcontent {
+        margin-left: 0 !important;
+        padding-left: 0 !important;
+    }
+    
+    .brcc-daily-sales-wrap {
+        padding: 0 !important;
+    }
+    
+    .brcc-dashboard-card {
+        break-inside: avoid;
+        page-break-inside: avoid;
+        margin-bottom: 20px !important;
+        border: 1px solid #ddd !important;
+        box-shadow: none !important;
+    }
+    
+    .brcc-metrics-row {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        page-break-inside: avoid !important;
+    }
+    
+    .brcc-charts-row {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        page-break-inside: avoid !important;
+    }
+    
+    .brcc-metric-card {
+        flex: 1 1 200px !important;
+        margin: 5px !important;
+        page-break-inside: avoid !important;
+    }
 }

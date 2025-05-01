@@ -1,0 +1,343 @@
+/**
+ * BRCC Inventory Tracker - Enhanced Dashboard Styles
+ */
+
+/* Dashboard Layout */
+.brcc-dashboard-wrap {
+    max-width: 1600px;
+    margin: 0 auto;
+}
+
+/* Dashboard Header */
+.brcc-dashboard-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #fff;
+    padding: 15px;
+    margin-bottom: 20px;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.brcc-view-tabs {
+    display: flex;
+    gap: 5px;
+}
+
+.brcc-view-tab {
+    padding: 8px 12px;
+    border-radius: 4px;
+    text-decoration: none;
+    color: #555;
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+}
+
+.brcc-view-tab.active {
+    background: #2271b1;
+    color: #fff;
+    border-color: #2271b1;
+}
+
+/* Metrics Row */
+.brcc-metrics-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.brcc-metric-card {
+    background: #fff;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    padding: 15px;
+    display: flex;
+    align-items: center;
+}
+
+.brcc-metric-icon {
+    width: 50px;
+    height: 50px;
+    border-radius: 50%;
+    background: #f0f6fc;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 15px;
+}
+
+.brcc-metric-icon .dashicons {
+    font-size: 24px;
+    width: 24px;
+    height: 24px;
+    color: #2271b1;
+}
+
+.brcc-metric-content {
+    flex: 1;
+}
+
+.brcc-metric-content h3 {
+    margin: 0 0 5px 0;
+    font-size: 14px;
+    color: #555;
+}
+
+.brcc-metric-value {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 5px;
+    color: #23282d;
+}
+
+.brcc-metric-trend {
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+}
+
+.brcc-metric-trend.positive {
+    color: #46b450;
+}
+
+.brcc-metric-trend.negative {
+    color: #dc3232;
+}
+
+.brcc-metric-trend.neutral {
+    color: #767676;
+}
+
+.brcc-metric-trend .dashicons {
+    font-size: 14px;
+    width: 14px;
+    height: 14px;
+    margin-right: 3px;
+}
+
+/* Dashboard Grid */
+.brcc-dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    margin-bottom: 20px;
+}
+
+.brcc-dashboard-card {
+    background: #fff;
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+}
+
+.brcc-full-width {
+    grid-column: 1 / -1;
+}
+
+.brcc-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px;
+    border-bottom: 1px solid #eee;
+}
+
+.brcc-card-header h2 {
+    margin: 0;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+}
+
+.brcc-card-header h2 .dashicons {
+    margin-right: 5px;
+    color: #2271b1;
+}
+
+.brcc-card-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.brcc-card-refresh {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: #767676;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+}
+
+.brcc-card-refresh:hover {
+    color: #2271b1;
+}
+
+.brcc-card-content {
+    padding: 15px;
+}
+
+/* Platform Stats */
+.brcc-platform-stats {
+    display: flex;
+    justify-content: space-around;
+    margin-top: 15px;
+    flex-wrap: wrap;
+}
+
+.brcc-platform-stat {
+    text-align: center;
+    padding: 10px;
+}
+
+.brcc-platform-label {
+    font-weight: 600;
+    margin-right: 5px;
+}
+
+/* Alerts */
+.brcc-alerts-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.brcc-alert-item {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    border-radius: 4px;
+    background: #f9f9f9;
+}
+
+.brcc-alert-critical {
+    background: #fef1f1;
+    border-left: 4px solid #dc3232;
+}
+
+.brcc-alert-warning {
+    background: #fff8e5;
+    border-left: 4px solid #ffb900;
+}
+
+.brcc-alert-error {
+    background: #fef1f1;
+    border-left: 4px solid #dc3232;
+}
+
+.brcc-alert-icon {
+    margin-right: 10px;
+}
+
+.brcc-alert-content {
+    flex: 1;
+}
+
+.brcc-alert-content h4 {
+    margin: 0 0 5px 0;
+}
+
+.brcc-alert-content p {
+    margin: 0;
+    color: #555;
+}
+
+.brcc-alert-actions {
+    margin-left: 10px;
+}
+
+/* Source Badges */
+.brcc-source-badge {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.brcc-source-woocommerce {
+    background: #f0f6fc;
+    color: #2271b1;
+}
+
+.brcc-source-eventbrite {
+    background: #ffebe5;
+    color: #d63638;
+}
+
+.brcc-source-square {
+    background: #e6f6ff;
+    color: #0073aa;
+}
+
+/* Table Styles */
+.brcc-table-responsive {
+    overflow-x: auto;
+}
+
+.brcc-sales-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.brcc-sales-table th,
+.brcc-sales-table td {
+    padding: 12px 15px;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+}
+
+.brcc-sales-table th {
+    background: #f9f9f9;
+    font-weight: 600;
+}
+
+.brcc-sales-table tr:hover {
+    background: #f5f5f5;
+}
+
+/* Empty States */
+.brcc-empty-state {
+    text-align: center;
+    padding: 30px;
+    color: #767676;
+}
+
+.brcc-empty-state .dashicons {
+    font-size: 30px;
+    width: 30px;
+    height: 30px;
+    margin-bottom: 10px;
+}
+
+/* Animations */
+.brcc-spin {
+    animation: brcc-spin 2s linear infinite;
+}
+
+@keyframes brcc-spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Responsive Adjustments */
+@media screen and (max-width: 1200px) {
+    .brcc-dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media screen and (max-width: 782px) {
+    .brcc-dashboard-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 15px;
+    }
+    
+    .brcc-metrics-row {
+        grid-template-columns: 1fr;
+    }
+}

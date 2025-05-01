@@ -65,6 +65,28 @@ public static function log_warning($message, $context = null) {
         }
         error_log($log_entry);
     }
+    
+    // Also log to the main operation log table
+    // Extract component/operation from message if possible, otherwise use defaults
+    $component = 'Legacy Log';
+    $operation = 'Warning';
+    // Basic check if context might contain more info
+    if (is_array($context) && isset($context['component']) && isset($context['operation'])) {
+        $component = $context['component'];
+        $operation = $context['operation'];
+    } elseif (is_string($context)) {
+         // Maybe context string gives a hint? Less reliable.
+         // For now, stick to defaults unless context is structured array.
+    }
+    
+    // Combine message and context for the main log message if context exists
+    $full_message = $message;
+    if ($context !== null) {
+        // Append context in a readable format
+        $full_message .= ' | Context: ' . wp_json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    }
+    
+    self::log_operation($component, $operation, $full_message, 'warning');
 }
     /**
      * Check if any logging is enabled (test mode or live logging)
@@ -82,27 +104,48 @@ public static function log_warning($message, $context = null) {
      * @param string $operation The operation being performed
      * @param string $details Details about the operation
      */
-    public static function log_operation($source, $operation, $details) {
+    public static function log_operation($component, $operation, $message, $log_type = 'info') {
+        // Renamed parameters for clarity and consistency with the database table
+        // $source -> $component
+        // $details -> $message
+        // Added $log_type parameter
+
         if (!self::should_log()) {
             return;
         }
-        
-        $logs = get_option('brcc_operation_logs', []);
-        
-        $logs[] = array(
-            'timestamp' => time(),
-            'source' => $source,
+
+        global $wpdb;
+        $table_name = $wpdb->prefix . 'brcc_operation_logs';
+
+        // Prepare data for insertion
+        $data = array(
+            'timestamp' => current_time('mysql', 1), // Use WordPress current time in GMT MySQL format
+            'component' => $component,
             'operation' => $operation,
-            'details' => $details,
-            'test_mode' => self::is_test_mode()
+            'message' => $message,
+            'log_type' => $log_type, // Use the provided log type
         );
-        
-        // Limit log size to prevent database bloat
-        if (count($logs) > 1000) {
-            $logs = array_slice($logs, -1000);
+
+        // Define data formats
+        $format = array(
+            '%s', // timestamp (string format for datetime)
+            '%s', // component
+            '%s', // operation
+            '%s', // message
+            '%s', // log_type
+        );
+
+        // Insert the log entry into the database table
+        $result = $wpdb->insert($table_name, $data, $format);
+
+        if ($result === false) {
+            // Log an error if insertion fails (e.g., to PHP error log)
+            error_log("BRCC Log Error: Failed to insert log into database. Error: " . $wpdb->last_error);
+            error_log("BRCC Log Error Data: " . print_r($data, true));
         }
-        
-        update_option('brcc_operation_logs', $logs);
+
+        // Note: The previous options table logic and size limiting are removed.
+        // Consider adding a database cleanup mechanism (e.g., delete logs older than X days) if needed in the future.
     }
     
     /**
@@ -173,6 +216,9 @@ public static function log_warning($message, $context = null) {
         }
         
         update_option('brcc_error_log', $log);
+        
+        // Also log to the main operation log table
+        self::log_operation('Legacy Log', 'Error', $message, 'error');
     }
     
     /**
@@ -194,6 +240,9 @@ public static function log_warning($message, $context = null) {
         }
         
         update_option('brcc_info_log', $log);
+        
+        // Also log to the main operation log table
+        self::log_operation('Legacy Log', 'Info', $message, 'info');
     }
 
     /**
@@ -502,6 +551,11 @@ public static function log_warning($message, $context = null) {
         // FooEvents specific meta keys
         $fooevents_keys = array(
             'WooCommerceEventsDate',
+            'WooCommerceEventsDateMySQLFormat', // Added based on actual meta keys
+            'WooCommerceEventsDateTimestamp',   // Added based on actual meta keys
+            'WooCommerceEventsEndDate',         // Added based on actual meta keys
+            'WooCommerceEventsEndDateMySQLFormat', // Added based on actual meta keys
+            'WooCommerceEventsEndDateTimestamp',   // Added based on actual meta keys
             'WooCommerceEventsTicketDate',
             'WooCommerceEventsProductDate',
             '_event_date',
@@ -563,11 +617,32 @@ public static function log_warning($message, $context = null) {
             // Log if needed: self::log_debug('extract_booking_time_from_item: Item is not a WC_Order_Item.');
             return null;
         }
+        
+        // First, check for the specific FooEvents hour/minute/period combination
+        $hour = $item->get_meta('WooCommerceEventsHour');
+        $minutes = $item->get_meta('WooCommerceEventsMinutes');
+        $period = $item->get_meta('WooCommerceEventsPeriod');
+        
+        if (!empty($hour) && !empty($minutes)) {
+            // Convert to 24-hour format if period is available
+            if (!empty($period) && strtoupper($period) === 'PM' && $hour < 12) {
+                $hour = $hour + 12;
+            } elseif (!empty($period) && strtoupper($period) === 'AM' && $hour == 12) {
+                $hour = 0;
+            }
+            
+            // Format as H:i
+            $time = sprintf('%02d:%02d', $hour, $minutes);
+            return $time;
+        }
 
         // Common meta keys for time
         $time_meta_keys = array(
             'fooevents_time', // FooEvents specific
             'WooCommerceEventsTime', // FooEvents specific
+            'WooCommerceEventsHour', // Added based on actual meta keys
+            'WooCommerceEventsMinutes', // Added based on actual meta keys
+            'WooCommerceEventsPeriod', // Added based on actual meta keys
             'event_time',
             'ticket_time',
             'booking_time',

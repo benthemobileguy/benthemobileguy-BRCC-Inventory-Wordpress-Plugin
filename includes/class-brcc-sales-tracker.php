@@ -178,21 +178,21 @@ class BRCC_Sales_Tracker {
                          'sku' => $sku,
                          'product_id' => $product_id,
                          'booking_date' => $booking_date,
-                         'quantity' => $quantity, // Start with current quantity
-                         'woocommerce' => $quantity, // Assume this sale is WC
-                         'eventbrite' => isset($daily_sales[$date][$product_key]['eventbrite']) ? $daily_sales[$date][$product_key]['eventbrite'] : 0, // Preserve existing value
-                         'square' => isset($daily_sales[$date][$product_key]['square']) ? $daily_sales[$date][$product_key]['square'] : 0 // Preserve existing value
+                         'quantity' => $quantity,
+                         'revenue' => $item->get_total(),
+                         'woocommerce' => $quantity,
+                         'eventbrite' => isset($daily_sales[$date][$product_key]['eventbrite']) ? $daily_sales[$date][$product_key]['eventbrite'] : 0,
+                         'square' => isset($daily_sales[$date][$product_key]['square']) ? $daily_sales[$date][$product_key]['square'] : 0,
+                         'timestamp' => current_time('timestamp'),
+                         'source' => 'woocommerce'
                      );
                  } else {
                      // Existing data is an array, proceed with updates
                      $daily_sales[$date][$product_key]['quantity'] = isset($daily_sales[$date][$product_key]['quantity']) ? ($daily_sales[$date][$product_key]['quantity'] + $quantity) : $quantity;
-
-                     // Add or increment WooCommerce quantity
-                     if (!isset($daily_sales[$date][$product_key]['woocommerce'])) {
-                         $daily_sales[$date][$product_key]['woocommerce'] = $quantity;
-                     } else {
-                         $daily_sales[$date][$product_key]['woocommerce'] += $quantity; // This line should now be safe
-                     }
+                     $daily_sales[$date][$product_key]['revenue'] = isset($daily_sales[$date][$product_key]['revenue']) ? ($daily_sales[$date][$product_key]['revenue'] + $item->get_total()) : $item->get_total();
+                     $daily_sales[$date][$product_key]['woocommerce'] = isset($daily_sales[$date][$product_key]['woocommerce']) ? ($daily_sales[$date][$product_key]['woocommerce'] + $quantity) : $quantity;
+                     $daily_sales[$date][$product_key]['timestamp'] = current_time('timestamp');
+                     $daily_sales[$date][$product_key]['source'] = 'woocommerce';
                  }
                  error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Existing entry updated/overwritten.");
             } else {
@@ -201,11 +201,14 @@ class BRCC_Sales_Tracker {
                     'name' => $product_name,
                     'sku' => $sku,
                     'product_id' => $product_id,
-                    'booking_date' => $booking_date, // booking_date is null
+                    'booking_date' => $booking_date,
                     'quantity' => $quantity,
+                    'revenue' => $item->get_total(),
                     'woocommerce' => $quantity,
                     'eventbrite' => 0,
-                    'square' => 0
+                    'square' => 0,
+                    'timestamp' => current_time('timestamp'),
+                    'source' => 'woocommerce'
                 );
                  error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Item ID: " . $item_id . " - New entry created.");
             }
@@ -231,14 +234,6 @@ class BRCC_Sales_Tracker {
                 'booking_date' => $data['booking_date'],
                 'booking_time' => null // Time not readily available here
             );
-
-            // Schedule Square update if Square integration is active/configured
-            // Example check (replace with actual check if needed):
-            // $settings = get_option('brcc_api_settings');
-            // if (!empty($settings['square_access_token'])) {
-                 wp_schedule_single_event(time() + 70, 'brcc_schedule_square_update_action', array($schedule_args)); // Stagger slightly
-                 error_log(sprintf('BRCC DEBUG [Order Paid Hook]: Scheduled Square update for Order %d, Product %d', $order_id, $data['product_id']));
-            // }
         }
         error_log("BRCC DEBUG [Order Paid Hook]: Reached end of handle_order_paid for Order ID: " . $order_id);
     }
@@ -706,24 +701,33 @@ class BRCC_Sales_Tracker {
             $daily_sales[$date] = array();
         }
         
+        // Get the product price
+        $price = $product->get_price();
+        $revenue = $quantity * $price;
+
         if (isset($daily_sales[$date][$product_key])) {
+            // Update existing entry
             $daily_sales[$date][$product_key]['quantity'] += $quantity;
-            // Add or increment Eventbrite quantity
-            if (!isset($daily_sales[$date][$product_key]['eventbrite'])) {
-                $daily_sales[$date][$product_key]['eventbrite'] = $quantity;
-            } else {
-                $daily_sales[$date][$product_key]['eventbrite'] += $quantity;
-            }
+            $daily_sales[$date][$product_key]['revenue'] = isset($daily_sales[$date][$product_key]['revenue']) ?
+                ($daily_sales[$date][$product_key]['revenue'] + $revenue) : $revenue;
+            $daily_sales[$date][$product_key]['eventbrite'] = isset($daily_sales[$date][$product_key]['eventbrite']) ?
+                ($daily_sales[$date][$product_key]['eventbrite'] + $quantity) : $quantity;
+            $daily_sales[$date][$product_key]['timestamp'] = current_time('timestamp');
+            $daily_sales[$date][$product_key]['source'] = 'eventbrite';
         } else {
+            // Create new entry
             $daily_sales[$date][$product_key] = array(
                 'name' => $product_name,
                 'sku' => $sku,
                 'product_id' => $product_id,
                 'booking_date' => $booking_date,
                 'quantity' => $quantity,
+                'revenue' => $revenue,
                 'woocommerce' => 0,
                 'eventbrite' => $quantity,
-                'square' => 0
+                'square' => 0,
+                'timestamp' => current_time('timestamp'),
+                'source' => 'eventbrite'
             );
         }
 
@@ -843,24 +847,33 @@ class BRCC_Sales_Tracker {
             $daily_sales[$date] = array();
         }
         
+        // Get the product price
+        $price = $product->get_price();
+        $revenue = $quantity * $price;
+
         if (isset($daily_sales[$date][$product_key])) {
+            // Update existing entry
             $daily_sales[$date][$product_key]['quantity'] += $quantity;
-            // Add or increment Square quantity
-            if (!isset($daily_sales[$date][$product_key]['square'])) {
-                $daily_sales[$date][$product_key]['square'] = $quantity;
-            } else {
-                $daily_sales[$date][$product_key]['square'] += $quantity;
-            }
+            $daily_sales[$date][$product_key]['revenue'] = isset($daily_sales[$date][$product_key]['revenue']) ?
+                ($daily_sales[$date][$product_key]['revenue'] + $revenue) : $revenue;
+            $daily_sales[$date][$product_key]['square'] = isset($daily_sales[$date][$product_key]['square']) ?
+                ($daily_sales[$date][$product_key]['square'] + $quantity) : $quantity;
+            $daily_sales[$date][$product_key]['timestamp'] = current_time('timestamp');
+            $daily_sales[$date][$product_key]['source'] = 'square';
         } else {
+            // Create new entry
             $daily_sales[$date][$product_key] = array(
                 'name' => $product_name,
                 'sku' => $sku,
                 'product_id' => $product_id,
                 'booking_date' => $booking_date,
                 'quantity' => $quantity,
+                'revenue' => $revenue,
                 'woocommerce' => 0,
                 'eventbrite' => 0,
-                'square' => $quantity
+                'square' => $quantity,
+                'timestamp' => current_time('timestamp'),
+                'source' => 'square'
             );
         }
 
@@ -932,9 +945,6 @@ class BRCC_Sales_Tracker {
         }
 
         return $filtered_sales;
-        
-        // If no data found, return empty array
-        return array();
     }
 
     /**
@@ -1074,12 +1084,14 @@ class BRCC_Sales_Tracker {
      * @return array Summary data including daily breakdowns
      */
     public function get_summary_by_period($start_date, $end_date = null) {
-        $daily_sales = $this->get_daily_sales();
+        $daily_sales = $this->get_daily_sales($start_date, $end_date);
         $summary = array(
             'total_sales' => 0,
+            'total_revenue' => 0,
             'woocommerce_sales' => 0,
             'eventbrite_sales' => 0,
             'square_sales' => 0,
+            'unique_products' => array(),
             'days' => array()
         );
         
@@ -1113,29 +1125,42 @@ class BRCC_Sales_Tracker {
             if (isset($daily_sales[$date_string])) {
                 foreach ($daily_sales[$date_string] as $product_key => $product_data) {
                     // Add to day summary
-                    // Check if $product_data is an array and has 'quantity' key
-                    if (is_array($product_data) && isset($product_data['quantity'])) {
-                        $day_summary['total_sales'] += $product_data['quantity'];
-                    } else {
-                        // Log or handle the case where data is not as expected
-                        // For now, just skip adding to total to prevent warning
-                    }
-                    $day_summary['woocommerce_sales'] += isset($product_data['woocommerce']) ? $product_data['woocommerce'] : 0;
-                    $day_summary['eventbrite_sales'] += isset($product_data['eventbrite']) ? $product_data['eventbrite'] : 0;
-                    $day_summary['square_sales'] += isset($product_data['square']) ? $product_data['square'] : 0;
-                    
-                    // Add product details
-                    $day_summary['products'][$product_key] = $product_data;
-                    
-                    // Add to overall summary
-                    // Check if $product_data is an array and has 'quantity' key
-                    if (is_array($product_data) && isset($product_data['quantity'])) {
-                         $summary['total_sales'] += $product_data['quantity'];
-                    } else {
+                    if (is_array($product_data)) {
+                        // Add to day summary
+                        if (isset($product_data['quantity'])) {
+                            $day_summary['total_sales'] += $product_data['quantity'];
+                        }
+                        if (isset($product_data['revenue'])) {
+                            $day_summary['total_revenue'] = isset($day_summary['total_revenue']) ?
+                                $day_summary['total_revenue'] + $product_data['revenue'] : $product_data['revenue'];
+                        }
+                        $day_summary['woocommerce_sales'] += isset($product_data['woocommerce']) ? $product_data['woocommerce'] : 0;
+                        $day_summary['eventbrite_sales'] += isset($product_data['eventbrite']) ? $product_data['eventbrite'] : 0;
+                        $day_summary['square_sales'] += isset($product_data['square']) ? $product_data['square'] : 0;
+                        
+                        // Add product details
+                        $day_summary['products'][$product_key] = $product_data;
+                        
+                        // Add to overall summary
+                        if (isset($product_data['quantity'])) {
+                            $summary['total_sales'] += $product_data['quantity'];
+                        }
+                        if (isset($product_data['revenue'])) {
+                            $summary['total_revenue'] = isset($summary['total_revenue']) ?
+                                $summary['total_revenue'] + $product_data['revenue'] : $product_data['revenue'];
+                        }
+                        $summary['woocommerce_sales'] += isset($product_data['woocommerce']) ? $product_data['woocommerce'] : 0;
+                        $summary['eventbrite_sales'] += isset($product_data['eventbrite']) ? $product_data['eventbrite'] : 0;
+                        $summary['square_sales'] += isset($product_data['square']) ? $product_data['square'] : 0;
+                        
+                        // Track unique products
+                        if (isset($product_data['product_id'])) {
+                            $summary['unique_products'][$product_data['product_id']] = true;
+                        }
+}
                          // Log or handle the case where data is not as expected
                          // For now, just skip adding to total to prevent warning
                          BRCC_Helpers::log_error('get_product_summary: Unexpected data format for product_key ' . $product_key . ' on date ' . $date_string . '. Expected array with quantity.', $product_data);
-                    }
                     $summary['woocommerce_sales'] += isset($product_data['woocommerce']) ? $product_data['woocommerce'] : 0;
                     $summary['eventbrite_sales'] += isset($product_data['eventbrite']) ? $product_data['eventbrite'] : 0;
                     $summary['square_sales'] += isset($product_data['square']) ? $product_data['square'] : 0;
