@@ -114,6 +114,29 @@ if (!defined('ABSPATH')) {
                 <div id="brcc-clear-cache-result" class="brcc-tool-result"></div>
             </div>
         </div>
+
+        <div class="brcc-tool-card">
+            <h3>Fix FooEvents Order Item Metadata</h3>
+            <p>Scans recent orders for FooEvents items with missing booking metadata and attempts to link them to existing tickets. This helps resolve Eventbrite sync issues.</p>
+            <table class="form-table">
+                <tbody>
+                    <tr>
+                        <th scope="row"><label for="brcc_fix_meta_days">Scan Orders from Last (days):</label></th>
+                        <td><input type="number" id="brcc_fix_meta_days" name="brcc_fix_meta_days" value="30" min="1" class="small-text"></td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="brcc_fix_meta_limit">Max Orders to Process:</label></th>
+                        <td><input type="number" id="brcc_fix_meta_limit" name="brcc_fix_meta_limit" value="50" min="1" class="small-text"></td>
+                    </tr>
+                </tbody>
+            </table>
+            <p>
+                <button type="button" id="brcc-run-fix-meta-button" class="button button-primary">Run Metadata Fix</button>
+                <span class="spinner" style="float: none; vertical-align: middle; margin-left: 5px;"></span>
+            </p>
+            <?php wp_nonce_field('brcc_fix_fooevents_metadata_nonce', 'brcc_fix_fooevents_metadata_nonce_field'); ?>
+            <div id="brcc-fix-meta-result" style="margin-top: 15px; padding: 10px; border: 1px solid #ccd0d4; background-color: #f6f7f7; display: none;"></div>
+        </div>
         
         <div class="brcc-tool-card">
             <h2><?php _e('System Information', 'brcc-inventory-tracker'); ?></h2>

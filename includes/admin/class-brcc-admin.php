@@ -91,15 +91,6 @@ class BRCC_Admin
             array($this->pages_handler, 'display_dashboard_page')
         );
         
-        // Daily Sales submenu
-        add_submenu_page(
-            'brcc-inventory',
-            __('Daily Sales', 'brcc-inventory-tracker'),
-            __('Daily Sales', 'brcc-inventory-tracker'),
-            'manage_options',
-            'brcc-daily-sales',
-            array($this->pages_handler, 'display_daily_sales_page')
-        );
         
         // Settings submenu
         add_submenu_page(
@@ -277,7 +268,8 @@ class BRCC_Admin
             'search_products_nonce' => wp_create_nonce('search-products'), // Nonce for WC product search
             'select_product_alert' => __('Please select a product.', 'brcc-inventory-tracker'),
             'select_date_alert' => __('Please select an event date.', 'brcc-inventory-tracker'),
-            'force_sync_confirm' => __('Are you sure you want to force sync inventory for this product/date? This will overwrite existing WC/EB counts based on recorded sales and cannot be undone.', 'brcc-inventory-tracker')
+            'force_sync_confirm' => __('Are you sure you want to force sync inventory for this product/date? This will overwrite existing WC/EB counts based on recorded sales and cannot be undone.', 'brcc-inventory-tracker'),
+            'sync_confirm' => __('Are you sure you want to sync inventory? This will update inventory counts between WooCommerce and Eventbrite.', 'brcc-inventory-tracker')
         ));
     }
 

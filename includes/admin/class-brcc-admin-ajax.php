@@ -41,6 +41,7 @@ class BRCC_Admin_AJAX {
         add_action('wp_ajax_brcc_get_sales_comparison', array($this, 'get_sales_comparison'));
         add_action('wp_ajax_brcc_fetch_all_attendees_for_date', array($this, 'fetch_all_attendees_for_date'));
         add_action('wp_ajax_brcc_export_all_attendees_csv', array($this, 'export_all_attendees_csv'));
+        add_action('wp_ajax_brcc_fix_fooevents_metadata_action', array($this, 'handle_fix_fooevents_metadata'));
     }
     
     /**
@@ -874,8 +875,13 @@ public function get_all_eventbrite_events_for_attendees() {
                     $event_time = isset($event['start']['local']) ? date('g:i A', strtotime($event['start']['local'])) : ''; // Format time
 
                     if ($event_id && $event_name) {
-                        // Append time to the name for clarity in the dropdown
-                        $events_for_dropdown[$event_id] = $event_name . ($event_time ? ' (' . $event_time . ')' : '');
+                        // Append time AND ID to the name for clarity in the dropdown
+                        $event_display_name = $event_name;
+                        if ($event_time) {
+                            $event_display_name .= ' (' . $event_time . ')';
+                        }
+                        $event_display_name .= ' [' . $event_id . ']'; // Add ID in brackets
+                        $events_for_dropdown[$event_id] = $event_display_name;
                     }
                 }
             }
@@ -888,8 +894,8 @@ public function get_all_eventbrite_events_for_attendees() {
             } elseif (is_array($events_result)) {
                 foreach ($events_result as $event) {
                     if (isset($event['id']) && isset($event['name']['text'])) {
-                        // Add ID to label for clarity
-                        $events_for_dropdown[$event['id']] = esc_html($event['name']['text']) . ' (' . $event['id'] . ')';
+                        // Add ID to label for clarity (using brackets for consistency)
+                        $events_for_dropdown[$event['id']] = esc_html($event['name']['text']) . ' [' . $event['id'] . ']';
                     }
                 }
             }
@@ -1526,8 +1532,26 @@ public function get_all_eventbrite_events_for_attendees() {
                     // Check if the item's event date matches the selected date
                     if (method_exists('BRCC_Helpers', 'get_fooevents_date_from_item')) {
                         $item_event_date = BRCC_Helpers::get_fooevents_date_from_item($item);
+                        $item_event_time = method_exists('BRCC_Helpers', 'extract_booking_time_from_item') ?
+                            BRCC_Helpers::extract_booking_time_from_item($item) : null;
+
+                        BRCC_Helpers::log_debug(sprintf(
+                            "[Attendee List] Order #%s, Item #%s: Extracted date: %s, time: %s",
+                            $order->get_id(),
+                            $item_id,
+                            $item_event_date ?: 'NULL',
+                            $item_event_time ?: 'NULL'
+                        ));
+
                         // Ensure date was extracted AND matches
                         if ($item_event_date !== null && $item_event_date === $selected_date) {
+                            // Get FooEvents ticket details
+                            $ticket_meta = BRCC_Helpers::_get_fooevents_ticket_meta_by_order_product(
+                                $order->get_id(),
+                                $actual_product_id,
+                                $item_id
+                            );
+
                             // Match found! Extract details.
                             $wc_attendees[] = [
                                 'name' => $order->get_formatted_billing_full_name() ?: 'N/A',
@@ -1535,8 +1559,18 @@ public function get_all_eventbrite_events_for_attendees() {
                                 'purchase_date' => $order_purchase_date,
                                 'order_ref' => $order->get_order_number(), // WC Order number
                                 'status' => $order->get_status(), // WC Order status
-                                'source' => 'WooCommerce'
+                                'source' => 'WooCommerce',
+                                'ticket_id' => $ticket_meta ? ($ticket_meta['ticket_id'] ?? 'N/A') : 'N/A',
+                                'booking_slot' => $item_event_time ?: 'N/A'
                             ];
+
+                            BRCC_Helpers::log_debug(sprintf(
+                                "[Attendee List] Order #%s, Item #%s: Added attendee %s (%s)",
+                                $order->get_id(),
+                                $item_id,
+                                $order->get_formatted_billing_full_name() ?: 'N/A',
+                                $order->get_billing_email() ?: 'N/A'
+                            ));
                         }
                     }
                 }
@@ -1623,6 +1657,8 @@ public function get_all_eventbrite_events_for_attendees() {
         }
         
         $selected_date = sanitize_text_field($_POST['selected_date']);
+        BRCC_Helpers::log_debug("[Attendee List AJAX] fetch_all_attendees_for_date: Received request for date: " . $selected_date);
+
         $all_attendees = [];
         $eventbrite_count = 0;
         $woocommerce_count = 0;
@@ -1653,9 +1689,11 @@ public function get_all_eventbrite_events_for_attendees() {
                 }
             }
         }
+        BRCC_Helpers::log_debug("[Attendee List AJAX] Products mapped to {$selected_date}: " . count($products_for_date), ['products_for_date' => $products_for_date]);
         
         // If no products found for this date, return empty result
         if (empty($products_for_date)) {
+            BRCC_Helpers::log_debug("[Attendee List AJAX] No products found explicitly mapped to {$selected_date}. Returning empty.");
             wp_send_json_success([
                 'attendees' => [],
                 'total_attendees' => 0,
@@ -1666,57 +1704,11 @@ public function get_all_eventbrite_events_for_attendees() {
             return;
         }
         
-        // Fetch attendees from Eventbrite
-        if (class_exists('BRCC_Eventbrite_Integration')) {
-            $eventbrite_integration = new BRCC_Eventbrite_Integration();
-            
-            foreach ($products_for_date as $product_data) {
-                $mapping = $product_data['mapping'];
-                
-                if (!empty($mapping['eventbrite_event_id'])) {
-                    $event_id = $mapping['eventbrite_event_id'];
-                    
-                    try {
-                        $eventbrite_data = $eventbrite_integration->get_event_attendees($event_id);
-                        
-                        if (is_wp_error($eventbrite_data)) {
-                            BRCC_Helpers::log_error("Attendee Fetch: Error fetching Eventbrite attendees for Event ID {$event_id}.", $eventbrite_data);
-                        } elseif (is_array($eventbrite_data) && isset($eventbrite_data['attendees']) && is_array($eventbrite_data['attendees'])) {
-                            // Get product name
-                            $product = wc_get_product($product_data['product_id']);
-                            $product_name = $product ? $product->get_name() : 'Unknown Product';
-                            
-                            foreach ($eventbrite_data['attendees'] as $attendee) {
-                                $profile = $attendee['profile'] ?? [];
-                                $name = isset($profile['name']) ? sanitize_text_field($profile['name']) : 'N/A';
-                                $email = isset($profile['email']) ? sanitize_email($profile['email']) : 'N/A';
-                                $purchase_date_raw = isset($attendee['created']) ? $attendee['created'] : null;
-                                $purchase_date_formatted = $purchase_date_raw ? date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($purchase_date_raw)) : 'N/A';
-                                $order_ref = isset($attendee['order_id']) ? sanitize_text_field($attendee['order_id']) : 'N/A';
-                                $status = isset($attendee['status']) ? sanitize_text_field($attendee['status']) : 'N/A';
-                                
-                                $all_attendees[] = [
-                                    'name' => $name,
-                                    'email' => $email,
-                                    'product_name' => $product_name,
-                                    'product_id' => $product_data['product_id'],
-                                    'purchase_date' => $purchase_date_formatted,
-                                    'order_ref' => $order_ref,
-                                    'status' => $status,
-                                    'source' => 'Eventbrite'
-                                ];
-                                
-                                $eventbrite_count++;
-                            }
-                        }
-                    } catch (Exception $e) {
-                        BRCC_Helpers::log_error("Attendee Fetch: Exception fetching Eventbrite attendees: " . $e->getMessage());
-                    }
-                }
-            }
-        }
+        // Track WooCommerce attendee emails to avoid duplicates
+        $woocommerce_attendee_emails = [];
+        BRCC_Helpers::log_debug("[Attendee List AJAX] Starting WooCommerce attendee fetch for {$selected_date}.");
         
-        // Fetch attendees from WooCommerce
+        // Fetch attendees from WooCommerce FIRST
         $args = [
             'status' => ['wc-processing', 'wc-completed'],
             'limit' => -1,
@@ -1752,14 +1744,19 @@ public function get_all_eventbrite_events_for_attendees() {
                     // Check if the item's event date matches the selected date
                     if (method_exists('BRCC_Helpers', 'get_fooevents_date_from_item')) {
                         $item_event_date = BRCC_Helpers::get_fooevents_date_from_item($item);
+                        BRCC_Helpers::log_debug(
+                            "[Attendee List AJAX] WC Item #{$item_id} (Product #{$actual_product_id}) in Order #{$order_id}: Extracted FooEvents date: " . ($item_event_date ?: 'NULL') . ". Comparing with selected: {$selected_date}"
+                        );
                         
                         if ($item_event_date !== null && $item_event_date === $selected_date) {
+                            BRCC_Helpers::log_debug("[Attendee List AJAX] WC Item #{$item_id}: Date match! Adding attendee.");
                             $product = wc_get_product($actual_product_id);
                             $product_name = $product ? $product->get_name() : 'Unknown Product';
+                            $customer_email = $order->get_billing_email() ?: 'N/A';
                             
                             $all_attendees[] = [
                                 'name' => $order->get_formatted_billing_full_name() ?: 'N/A',
-                                'email' => $order->get_billing_email() ?: 'N/A',
+                                'email' => $customer_email,
                                 'product_name' => $product_name,
                                 'product_id' => $actual_product_id,
                                 'purchase_date' => $order_purchase_date,
@@ -1768,6 +1765,11 @@ public function get_all_eventbrite_events_for_attendees() {
                                 'source' => 'WooCommerce'
                             ];
                             
+                            // Track this email to avoid duplicates from Eventbrite
+                            if ($customer_email !== 'N/A') {
+                                $woocommerce_attendee_emails[strtolower($customer_email)] = true;
+                            }
+                            
                             $woocommerce_count++;
                         }
                     }
@@ -1775,10 +1777,77 @@ public function get_all_eventbrite_events_for_attendees() {
             }
         }
         
+        // NOW fetch attendees from Eventbrite AFTER WooCommerce
+        if (class_exists('BRCC_Eventbrite_Integration')) {
+            $eventbrite_integration = new BRCC_Eventbrite_Integration();
+            
+            foreach ($products_for_date as $product_data) {
+                $mapping = $product_data['mapping'];
+                
+                if (!empty($mapping['eventbrite_event_id'])) {
+                    $event_id = $mapping['eventbrite_event_id'];
+                    
+                    try {
+                        $eventbrite_data = $eventbrite_integration->get_event_attendees($event_id);
+                        
+                        if (is_wp_error($eventbrite_data)) {
+                            BRCC_Helpers::log_error("Attendee Fetch: Error fetching Eventbrite attendees for Event ID {$event_id}.", $eventbrite_data);
+                        } elseif (is_array($eventbrite_data) && isset($eventbrite_data['attendees']) && is_array($eventbrite_data['attendees'])) {
+                            // Get product name
+                            $product = wc_get_product($product_data['product_id']);
+                            $product_name = $product ? $product->get_name() : 'Unknown Product';
+                            
+                            foreach ($eventbrite_data['attendees'] as $attendee) {
+                                $profile = $attendee['profile'] ?? [];
+                                $name = isset($profile['name']) ? sanitize_text_field($profile['name']) : 'N/A';
+                                $email = isset($profile['email']) ? sanitize_email($profile['email']) : 'N/A';
+                                
+                                // Skip this attendee if we already have them from WooCommerce
+                                if ($email !== 'N/A' && isset($woocommerce_attendee_emails[strtolower($email)])) {
+                                    BRCC_Helpers::log_debug("Attendee Fetch: Skipping Eventbrite attendee {$name} ({$email}) as they already exist in WooCommerce records.");
+                                    continue;
+                                }
+                                
+                                $purchase_date_raw = isset($attendee['created']) ? $attendee['created'] : null;
+                                $purchase_date_formatted = $purchase_date_raw ? date_i18n(get_option('date_format') . ' ' . get_option('time_format'), strtotime($purchase_date_raw)) : 'N/A';
+                                $order_ref = isset($attendee['order_id']) ? sanitize_text_field($attendee['order_id']) : 'N/A';
+                                $status = isset($attendee['status']) ? sanitize_text_field($attendee['status']) : 'N/A';
+                                
+                                $all_attendees[] = [
+                                    'name' => $name,
+                                    'email' => $email,
+                                    'product_name' => $product_name,
+                                    'product_id' => $product_data['product_id'],
+                                    'purchase_date' => $purchase_date_formatted,
+                                    'order_ref' => $order_ref,
+                                    'status' => $status,
+                                    'source' => 'Eventbrite'
+                                ];
+                                
+                                $eventbrite_count++;
+                            }
+                        }
+                    } catch (Exception $e) {
+                        BRCC_Helpers::log_error("Attendee Fetch: Exception fetching Eventbrite attendees: " . $e->getMessage());
+                    }
+                }
+            }
+        }
+        
         // Sort attendees by purchase date (newest first)
         usort($all_attendees, function($a, $b) {
-            return strtotime($b['purchase_date']) - strtotime($a['purchase_date']);
+            // Ensure purchase_date exists and is valid before using in strtotime
+            $time_a = isset($a['purchase_date']) ? strtotime($a['purchase_date']) : 0;
+            $time_b = isset($b['purchase_date']) ? strtotime($b['purchase_date']) : 0;
+            return $time_b - $time_a; // Sort descending (newest first)
         });
+
+        BRCC_Helpers::log_debug("[Attendee List AJAX] Final data being sent to JS:", [
+            'count_all_attendees' => count($all_attendees),
+            'eventbrite_count' => $eventbrite_count,
+            'woocommerce_count' => $woocommerce_count,
+            'first_few_attendees' => array_slice($all_attendees, 0, 5) // Log first 5 to check structure
+        ]);
         
         wp_send_json_success([
             'attendees' => $all_attendees,
@@ -2585,8 +2654,9 @@ public function get_all_eventbrite_events_for_attendees() {
             return;
         }
         
-        // Get card type from request
+        // Get card type and date from request
         $card_type = isset($_POST['card_type']) ? sanitize_text_field($_POST['card_type']) : '';
+        $selected_date = isset($_POST['date']) ? sanitize_text_field($_POST['date']) : current_time('Y-m-d');
         
         if (empty($card_type)) {
             wp_send_json_error(array('message' => __('Card type is required.', 'brcc-inventory-tracker')));
@@ -2596,45 +2666,116 @@ public function get_all_eventbrite_events_for_attendees() {
         // Initialize response data
         $response = array(
             'message' => sprintf(__('%s data refreshed successfully!', 'brcc-inventory-tracker'), ucfirst($card_type)),
-            'card_type' => $card_type
+            'card_type' => $card_type,
+            'date' => $selected_date
         );
+        
+        // Get sales tracker instance
+        $sales_tracker = new BRCC_Sales_Tracker();
         
         // Get fresh data based on card type
         switch ($card_type) {
-            case 'inventory-status':
-                // Refresh inventory status data
-                // In a real implementation, you would fetch fresh inventory data here
-                $response['message'] = __('Inventory status refreshed successfully!', 'brcc-inventory-tracker');
+            case 'sales-by-source':
+                // Refresh sales by source data
+                $sales_data = $sales_tracker->get_daily_sales($selected_date, $selected_date);
+                
+                // Calculate sales by source
+                $sales_by_source = array();
+                foreach ($sales_data as $sale) {
+                    $source = isset($sale['source']) ? sanitize_text_field($sale['source']) : 'Unknown';
+                    $quantity = isset($sale['quantity']) ? (int)$sale['quantity'] : 0;
+                    
+                    if (!isset($sales_by_source[$source])) {
+                        $sales_by_source[$source] = 0;
+                    }
+                    $sales_by_source[$source] += $quantity;
+                }
+                
+                $response['data'] = array(
+                    'sales_by_source' => $sales_by_source
+                );
+                $response['message'] = __('Sales by source data refreshed successfully!', 'brcc-inventory-tracker');
                 break;
                 
-            case 'sales-trend':
-                // Refresh sales trend data
-                // In a real implementation, you would fetch fresh sales trend data here
-                $response['message'] = __('Sales trend data refreshed successfully!', 'brcc-inventory-tracker');
+            case 'sales-by-hour':
+                // Refresh sales by hour data
+                $sales_data = $sales_tracker->get_daily_sales($selected_date, $selected_date);
+                
+                // Calculate sales by hour
+                $sales_by_hour = array_fill(0, 24, 0); // Initialize hours 0-23
+                foreach ($sales_data as $sale) {
+                    $timestamp = isset($sale['timestamp']) ? (int)$sale['timestamp'] : null;
+                    $quantity = isset($sale['quantity']) ? (int)$sale['quantity'] : 0;
+                    
+                    if ($timestamp) {
+                        $hour = (int)date('G', $timestamp); // 'G' for 24-hour format without leading zeros
+                        if (isset($sales_by_hour[$hour])) {
+                            $sales_by_hour[$hour] += $quantity;
+                        }
+                    }
+                }
+                
+                $response['data'] = array(
+                    'sales_by_hour' => $sales_by_hour
+                );
+                $response['message'] = __('Sales by hour data refreshed successfully!', 'brcc-inventory-tracker');
                 break;
                 
-            case 'platform-comparison':
-                // Refresh platform comparison data
-                // In a real implementation, you would fetch fresh platform comparison data here
-                $response['message'] = __('Platform comparison data refreshed successfully!', 'brcc-inventory-tracker');
+            case 'sales-by-category':
+                // Refresh sales by category data
+                $sales_data = $sales_tracker->get_daily_sales($selected_date, $selected_date);
+                
+                // Calculate sales by category
+                $sales_by_category = array();
+                foreach ($sales_data as $sale) {
+                    $product_id = isset($sale['product_id']) ? (int)$sale['product_id'] : 0;
+                    $quantity = isset($sale['quantity']) ? (int)$sale['quantity'] : 0;
+                    
+                    if ($product_id) {
+                        $product = wc_get_product($product_id);
+                        if ($product) {
+                            $categories = $product->get_category_ids();
+                            if (!empty($categories)) {
+                                foreach ($categories as $category_id) {
+                                    $category = get_term($category_id, 'product_cat');
+                                    if ($category && !is_wp_error($category)) {
+                                        $category_name = $category->name;
+                                        if (!isset($sales_by_category[$category_name])) {
+                                            $sales_by_category[$category_name] = 0;
+                                        }
+                                        $sales_by_category[$category_name] += $quantity;
+                                    }
+                                }
+                            } else {
+                                // No category assigned
+                                if (!isset($sales_by_category['Uncategorized'])) {
+                                    $sales_by_category['Uncategorized'] = 0;
+                                }
+                                $sales_by_category['Uncategorized'] += $quantity;
+                            }
+                        }
+                    }
+                }
+                
+                $response['data'] = array(
+                    'sales_by_category' => $sales_by_category
+                );
+                $response['message'] = __('Sales by category data refreshed successfully!', 'brcc-inventory-tracker');
                 break;
                 
-            case 'top-products':
-                // Refresh top products data
-                // In a real implementation, you would fetch fresh top products data here
-                $response['message'] = __('Top products data refreshed successfully!', 'brcc-inventory-tracker');
+            case 'sales-comparison':
+                // This is handled by the get_sales_comparison method
+                $response['message'] = __('Please use the comparison dropdown to refresh comparison data.', 'brcc-inventory-tracker');
                 break;
                 
-            case 'inventory-alerts':
-                // Refresh inventory alerts data
-                // In a real implementation, you would fetch fresh inventory alerts data here
-                $response['message'] = __('Inventory alerts refreshed successfully!', 'brcc-inventory-tracker');
-                break;
+            case 'sales-details':
+                // Refresh sales details data
+                $sales_data = $sales_tracker->get_daily_sales($selected_date, $selected_date);
                 
-            case 'recent-sales':
-                // Refresh recent sales data
-                // In a real implementation, you would fetch fresh recent sales data here
-                $response['message'] = __('Recent sales data refreshed successfully!', 'brcc-inventory-tracker');
+                $response['data'] = array(
+                    'sales_data' => $sales_data
+                );
+                $response['message'] = __('Sales details refreshed successfully!', 'brcc-inventory-tracker');
                 break;
                 
             default:
@@ -2643,10 +2784,7 @@ public function get_all_eventbrite_events_for_attendees() {
                 return;
         }
         
-        // For now, we'll just return a success message without HTML content
-        // In a real implementation, you would generate the HTML content for the card
-        // and include it in the response
-        
+        // Return the response with the refreshed data
         wp_send_json_success($response);
     }
 
@@ -2735,7 +2873,72 @@ public function get_all_eventbrite_events_for_attendees() {
     /**
      * AJAX: Get sales comparison data
      * Used to compare sales data between different periods
+/**
+     * AJAX: Fix FooEvents Order Item Metadata
      */
+    public function handle_fix_fooevents_metadata() {
+        error_log('[BRCC DEBUG] handle_fix_fooevents_metadata: AJAX call received. POST data: ' . print_r($_POST, true));
+        // Verify nonce
+        check_ajax_referer('brcc_fix_fooevents_metadata_nonce', 'nonce');
+        error_log('[BRCC DEBUG] handle_fix_fooevents_metadata: Nonce check passed.');
+
+        // Check user capabilities
+        if (!current_user_can('manage_options')) {
+            wp_send_json_error(['message' => __('Permission denied.', 'brcc-inventory-tracker')], 403);
+            return;
+        }
+
+        // Get and sanitize parameters
+        $days_to_look_back = isset($_POST['days']) ? intval($_POST['days']) : 30;
+        $limit = isset($_POST['limit']) ? intval($_POST['limit']) : 50;
+
+        if ($days_to_look_back <= 0) {
+            $days_to_look_back = 30;
+        }
+        if ($limit <= 0) {
+            $limit = 50;
+        }
+
+        // Call the helper function
+        if (!class_exists('BRCC_Helpers')) {
+            error_log('[BRCC DEBUG] handle_fix_fooevents_metadata: BRCC_Helpers class not found.');
+            wp_send_json_error(['message' => 'BRCC_Helpers class not found.'], 500);
+            return;
+        }
+        error_log('[BRCC DEBUG] handle_fix_fooevents_metadata: BRCC_Helpers class exists. Proceeding to log attempt.');
+
+        // Log the attempt
+        if (BRCC_Helpers::should_log() || BRCC_Helpers::is_test_mode()) {
+            BRCC_Helpers::log_operation(
+                'Admin AJAX',
+                'Fix FooEvents Metadata',
+                sprintf(
+                    'Attempting to fix metadata for orders in the last %d days, limit %d. Test Mode: %s',
+                    $days_to_look_back,
+                    $limit,
+                    BRCC_Helpers::is_test_mode() ? 'Yes' : 'No'
+                )
+            );
+        }
+        error_log('[BRCC DEBUG] handle_fix_fooevents_metadata: Calling BRCC_Helpers::fix_missing_fooevents_metadata with days=' . $days_to_look_back . ', limit=' . $limit);
+        $results = BRCC_Helpers::fix_missing_fooevents_metadata($days_to_look_back, $limit);
+        error_log('[BRCC DEBUG] handle_fix_fooevents_metadata: Result from helper: ' . print_r($results, true));
+
+        // Send the JSON response
+        if (isset($results['error'])) {
+            error_log('[BRCC DEBUG] handle_fix_fooevents_metadata: Sending JSON error: ' . print_r($results['error'], true));
+            wp_send_json_error(['message' => $results['error'], 'stats' => $results['stats'] ?? null, 'log_messages' => $results['log_messages'] ?? []], 400);
+        } else {
+            $response_data = [
+                'message' => __('Metadata fix process completed.', 'brcc-inventory-tracker'),
+                'stats' => $results['stats'] ?? [],
+                'log_messages' => $results['log_messages'] ?? []
+            ];
+            error_log('[BRCC DEBUG] handle_fix_fooevents_metadata: Sending JSON success. Data: ' . print_r($response_data, true));
+            wp_send_json_success($response_data);
+        }
+    }
+
     public function get_sales_comparison()
     {
         // Check nonce and capability
@@ -2752,6 +2955,12 @@ public function get_all_eventbrite_events_for_attendees() {
         // Get parameters
         $date = isset($_POST['date']) ? sanitize_text_field($_POST['date']) : current_time('Y-m-d');
         $comparison_type = isset($_POST['comparison_type']) ? sanitize_text_field($_POST['comparison_type']) : 'previous_day';
+        
+        // Validate date format
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
+            wp_send_json_error(array('message' => __('Invalid date format. Please use YYYY-MM-DD.', 'brcc-inventory-tracker')));
+            return;
+        }
         
         // Calculate comparison date based on comparison type
         $comparison_date = '';
@@ -2775,6 +2984,9 @@ public function get_all_eventbrite_events_for_attendees() {
                 wp_send_json_error(array('message' => __('Invalid comparison type.', 'brcc-inventory-tracker')));
                 return;
         }
+        
+        // Log the comparison request for debugging
+        BRCC_Helpers::log_debug("get_sales_comparison: Comparing {$date} with {$comparison_date} ({$comparison_type})");
         
         // Get sales data for both dates
         $sales_tracker = new BRCC_Sales_Tracker();
@@ -2827,7 +3039,10 @@ public function get_all_eventbrite_events_for_attendees() {
         $current_date_formatted = date_i18n(get_option('date_format'), strtotime($date));
         $comparison_date_formatted = date_i18n(get_option('date_format'), strtotime($comparison_date));
         
-        // Send response
+        // Log the comparison results for debugging
+        BRCC_Helpers::log_debug("get_sales_comparison: Comparison results - Current: " . json_encode($current_data) . ", Comparison: " . json_encode($comparison_data));
+        
+        // Send response with additional data
         wp_send_json_success(array(
             'labels' => $labels,
             'current_data' => $current_data,
@@ -2835,7 +3050,9 @@ public function get_all_eventbrite_events_for_attendees() {
             'current_label' => sprintf(__('%s', 'brcc-inventory-tracker'), $current_date_formatted),
             'comparison_label' => sprintf(__('%s (%s)', 'brcc-inventory-tracker'), $comparison_date_formatted, $comparison_label),
             'current_date' => $date,
-            'comparison_date' => $comparison_date
+            'comparison_date' => $comparison_date,
+            'has_data' => (!empty($current_sales) || !empty($comparison_sales)),
+            'timestamp' => current_time('timestamp')
         ));
     }
 } // End of BRCC_Admin_AJAX class

@@ -53,33 +53,78 @@ class BRCC_Admin_Pages {
         // Get sales tracker data
         $sales_tracker = new BRCC_Sales_Tracker();
         $period_summary = $sales_tracker->get_summary_by_period($start_date, $end_date);
-        $daily_sales = $sales_tracker->get_daily_sales($start_date, $end_date);
+        $nested_daily_sales = $sales_tracker->get_daily_sales($start_date, $end_date);
+        
+        // Transform nested daily sales data into a flat structure for the dashboard
+        $daily_sales = $this->flatten_daily_sales($nested_daily_sales);
         
         // Include the template
         include(BRCC_INVENTORY_TRACKER_PLUGIN_DIR . 'includes/admin/views/dashboard-page.php');
     }
     
     /**
-     * Display daily sales page
-     * 
-     * Prepares data and renders the daily sales page.
-     * This page shows detailed sales data for a specific date.
+     * Flatten the nested daily sales data into a format suitable for the dashboard
+     *
+     * @param array $nested_sales The nested sales data from get_daily_sales
+     * @return array Flattened sales data
      */
-    public function display_daily_sales_page() {
-        // Get date from query string or use today's date
-        $selected_date = isset($_GET['date']) ? sanitize_text_field($_GET['date']) : current_time('Y-m-d');
+    private function flatten_daily_sales($nested_sales) {
+        $flattened_sales = [];
         
-        // Validate date format
-        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $selected_date)) {
-            $selected_date = current_time('Y-m-d');
+        // Process each date
+        foreach ($nested_sales as $date => $products) {
+            // Process each product for this date
+            foreach ($products as $product_key => $product_data) {
+                // Create a flattened sale entry
+                $sale_entry = [
+                    'sale_date' => $date,
+                    'product_id' => $product_data['product_id'] ?? null,
+                    'product_name' => $product_data['name'] ?? null,
+                    'quantity' => $product_data['quantity'] ?? 0,
+                    'revenue' => 0, // Default value
+                    'source' => 'Unknown' // Default value
+                ];
+                
+                // Calculate revenue from orders if available
+                if (isset($product_data['orders']) && is_array($product_data['orders'])) {
+                    $revenue = 0;
+                    $sources = [];
+                    
+                    foreach ($product_data['orders'] as $order) {
+                        $revenue += (float)($order['amount'] ?? 0);
+                        if (!empty($order['source'])) {
+                            $sources[] = $order['source'];
+                        }
+                    }
+                    
+                    $sale_entry['revenue'] = $revenue;
+                    
+                    // Set the source based on the most common source in orders
+                    if (!empty($sources)) {
+                        $source_counts = array_count_values($sources);
+                        arsort($source_counts);
+                        $sale_entry['source'] = key($source_counts);
+                    } else {
+                        // Try to determine source from individual counters
+                        foreach (['woocommerce', 'eventbrite', 'square'] as $possible_source) {
+                            if (isset($product_data[$possible_source]) && $product_data[$possible_source] > 0) {
+                                $sale_entry['source'] = ucfirst($possible_source);
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                $flattened_sales[] = $sale_entry;
+            }
         }
         
-        // Get sales data for the selected date
-        $sales_tracker = new BRCC_Sales_Tracker();
-        $sales_data = $sales_tracker->get_daily_sales($selected_date, $selected_date);
+        // Sort by date (newest first)
+        usort($flattened_sales, function($a, $b) {
+            return strtotime($b['sale_date']) - strtotime($a['sale_date']);
+        });
         
-        // Include the template
-        include(BRCC_INVENTORY_TRACKER_PLUGIN_DIR . 'includes/admin/views/daily-sales-page.php');
+        return $flattened_sales;
     }
     
     /**

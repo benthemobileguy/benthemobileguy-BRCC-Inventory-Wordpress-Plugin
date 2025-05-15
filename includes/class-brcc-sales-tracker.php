@@ -33,209 +33,150 @@ class BRCC_Sales_Tracker {
      * @param WC_Order $order    Order object.
      */
     public function handle_order_paid($order_id, $order) {
-        // --- BRCC DEBUG: Check if hook is firing ---
-        error_log("BRCC DEBUG [Order Paid Hook]: Hook fired for Order ID: " . $order_id . " - New Status: " . $order->get_status());
-        // --- END BRCC DEBUG ---
+        BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Hook fired. New Status: %s.", $order_id, $order->get_status()));
 
-        // Prevent duplicate processing (important as this might fire multiple times)
-        $order_key = 'wc_paid_' . $order_id; // Use a different prefix to avoid conflict with old thank you hook processing
+        $order_key = 'wc_paid_' . $order_id;
         if ($this->is_sale_processed($order_key)) {
-            error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " already processed with 'wc_paid_' key. Skipping.");
+            BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Already processed with key '%s'. Skipping.", $order_id, $order_key));
             return;
         }
 
-        // Double-check the order object
         if (!$order) {
             $order = wc_get_order($order_id);
             if (!$order) {
-                error_log("BRCC DEBUG [Order Paid Hook]: Could not retrieve order object for Order ID: " . $order_id);
+                BRCC_Helpers::log_operation('Sales Tracking', 'Order Paid Init Failed', sprintf("[BRCC Order #%d] Could not retrieve order object.", $order_id), 'error');
                 return;
             }
         }
+        $current_status = $order->get_status();
+        BRCC_Helpers::log_operation('Sales Tracking', 'Order Paid Init', sprintf("[BRCC Order #%d] Processing order with status '%s'.", $order_id, $current_status), 'info');
 
-        // Status check is implicitly handled by the hook firing, but we can log it.
-        error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " status is '" . $order->get_status() . "'. Proceeding with recording sale...");
-
-        // Check if test mode is enabled
         if (BRCC_Helpers::is_test_mode()) {
-            BRCC_Helpers::log_operation(
-                'WooCommerce',
-                'Order Completed',
-                sprintf(__('Order #%s completed. Would update sales tracking.', 'brcc-inventory-tracker'), $order_id)
-            );
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Test Mode enabled. Skipping actual update, triggering test actions.");
-            // Still trigger product sold action in test mode to allow other test logs
-            do_action('brcc_product_sold', $order_id, $order);
+            $message = sprintf("[BRCC Order #%d] Test Mode: Order status changed to '%s'. Sales tracking update would occur.", $order_id, $current_status);
+            BRCC_Helpers::log_operation('Sales Tracking', 'Order Paid (Test Mode)', $message, 'info');
+            BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Test Mode enabled. Skipping actual update, triggering test actions.", $order_id));
+            do_action('brcc_product_sold', $order_id, $order); // Allow other test logs
             return;
         } else {
-             error_log("BRCC DEBUG: Order ID: " . $order_id . " - Live Mode. Attempting to log operation...");
-             if (BRCC_Helpers::should_log()) {
-                 BRCC_Helpers::log_operation(
-                     'WooCommerce',
-                     'Order Completed',
-                     sprintf(__('Order #%s completed. Updating sales tracking. (Live Mode)', 'brcc-inventory-tracker'), $order_id)
-                 );
-                 error_log("BRCC DEBUG: Order ID: " . $order_id . " - Live logging successful.");
-             } else {
-                 error_log("BRCC DEBUG: Order ID: " . $order_id . " - Live logging is disabled.");
-             }
+            if (BRCC_Helpers::should_log()) {
+                 $message = sprintf("[BRCC Order #%d] Live Mode: Order status changed to '%s'. Updating sales tracking.", $order_id, $current_status);
+                 BRCC_Helpers::log_operation('Sales Tracking', 'Order Paid (Live Mode)', $message, 'info');
+                 BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Live logging enabled and operation logged.", $order_id));
+            } else {
+                 BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Live logging is disabled.", $order_id));
+            }
         }
 
-        error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Getting date and options...");
-        // Get the current date (WordPress timezone)
+        BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Getting date and options.", $order_id));
         $date = current_time('Y-m-d');
-
-        // Get existing daily sales data
         $daily_sales = get_option('brcc_daily_sales', []);
-        error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Date: " . $date . ". Got daily_sales option.");
+        BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Current Date: %s. Retrieved daily_sales option.", $order_id, $date));
 
-        error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Getting order items...");
-        // Extract product information from the order
+        BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Getting order items.", $order_id));
         $items = $order->get_items();
         $product_date_quantities = [];
-        error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Found " . count($items) . " items. Before looping through items...");
+        BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Found %d items. Starting item loop.", $order_id, count($items)));
 
         foreach ($items as $item_id => $item) {
-            error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Processing Item ID: " . $item_id . " - Item Type: " . (is_object($item) ? get_class($item) : gettype($item)));
+            BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Processing Item #%d (Type: %s).", $order_id, $item_id, (is_object($item) ? get_class($item) : gettype($item))));
 
-            error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Calling \$item->get_product_id()...");
             $product_id = $item->get_product_id();
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Got Product ID: " . $product_id);
+            BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d: Product ID: %s.", $order_id, $item_id, $product_id));
 
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Calling wc_get_product(" . $product_id . ")...");
             $product = wc_get_product($product_id);
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - wc_get_product returned: " . ($product ? get_class($product) : 'null'));
+            BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d: wc_get_product(%s) returned: %s.", $order_id, $item_id, $product_id, ($product ? get_class($product) : 'null')));
 
             if (!$product) {
-                error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Product lookup FAILED. Skipping item.");
+                $message = sprintf("[BRCC Order #%d][Order Paid Hook] Skipped Item #%d: Product lookup failed for Product ID %s.", $order_id, $item_id, $product_id);
+                BRCC_Helpers::log_operation('Sales Tracking', 'Item Processing Warning', $message, 'warning', ['order_id' => $order_id, 'item_id' => $item_id, 'product_id' => $product_id]);
                 continue;
             }
 
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Calling \$item->get_quantity()...");
             $quantity = $item->get_quantity();
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Got Quantity: " . $quantity);
-
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Calling \$product->get_name()...");
             $product_name = $product->get_name();
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Got Product Name: " . $product_name);
-
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Calling \$product->get_sku()...");
             $sku = $product->get_sku();
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Got SKU: " . $sku);
+            BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d (Product #%s '%s', SKU: '%s'): Quantity: %d.", $order_id, $item_id, $product_id, $product_name, $sku ?: 'N/A', $quantity));
 
-            // Get booking/event date if available - enhanced detection
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Calling get_booking_date_from_item...");
-            $booking_date = $this->get_booking_date_from_item($item); // This function now has internal logging too
+            BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d: Calling get_booking_date_from_item.", $order_id, $item_id));
+            $booking_date = $this->get_booking_date_from_item($item);
+            $booking_date_str = $booking_date ?: 'N/A';
+            BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d: Extracted Booking Date: %s.", $order_id, $item_id, $booking_date_str));
             
-            // Track product-date quantities for summary calculation
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Calculating product_key for summary...");
-            $product_key = $product_id . ($booking_date ? '_' . $booking_date : '');
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Summary product_key: " . $product_key);
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Checking/Initializing \$product_date_quantities['" . $product_key . "']...");
-            if (!isset($product_date_quantities[$product_key])) {
-                 error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Initializing \$product_date_quantities['" . $product_key . "']");
-                $product_date_quantities[$product_key] = [
+            $summary_product_key = $product_id . ($booking_date ? '_' . $booking_date : '');
+            BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d: Summary product_key: %s.", $order_id, $item_id, $summary_product_key));
+            if (!isset($product_date_quantities[$summary_product_key])) {
+                BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d: Initializing product_date_quantities for key '%s'.", $order_id, $item_id, $summary_product_key));
+                $product_date_quantities[$summary_product_key] = [
                     'product_id' => $product_id,
                     'name' => $product_name,
                     'sku' => $sku,
-                    'booking_date' => $booking_date, // booking_date is null
+                    'booking_date' => $booking_date,
                     'quantity' => 0
                 ];
-            } else {
-                 error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - \$product_date_quantities['" . $product_key . "'] already exists.");
             }
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Updating quantity in \$product_date_quantities['" . $product_key . "']...");
-            $product_date_quantities[$product_key]['quantity'] += $quantity;
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Quantity updated.");
+            $product_date_quantities[$summary_product_key]['quantity'] += $quantity;
+            BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d: Updated quantity for key '%s' to %d.", $order_id, $item_id, $summary_product_key, $product_date_quantities[$summary_product_key]['quantity']));
             
-            // Update daily sales for the product
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Checking/Initializing \$daily_sales['" . $date . "']...");
+            BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d: Updating daily sales for date %s.", $order_id, $item_id, $date));
             if (!isset($daily_sales[$date])) {
-                 error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Initializing \$daily_sales['" . $date . "']");
+                BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d: Initializing daily_sales for date '%s'.", $order_id, $item_id, $date));
                 $daily_sales[$date] = array();
-            } else {
-                 error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - \$daily_sales['" . $date . "'] already exists.");
             }
             
-            // Create unique key for product + booking date
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Recalculating product_key for daily sales...");
-            $product_key = $booking_date ? $product_id . '_' . $booking_date : $product_id;
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Daily sales product_key: " . $product_key);
+            $daily_sales_product_key = $booking_date ? $product_id . '_' . $booking_date : (string)$product_id; // Ensure key is string
+            BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d: Daily sales product_key: %s.", $order_id, $item_id, $daily_sales_product_key));
             
-            error_log("BRCC DEBUG: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Checking/Updating \$daily_sales['" . $date . "']['" . $product_key . "']...");
-            if (isset($daily_sales[$date][$product_key])) {
-                 error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Updating existing entry in daily sales...");
-                 // --- BRCC DEBUG: Inspect existing entry ---
-                 error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Existing daily_sales entry content: " . print_r($daily_sales[$date][$product_key], true));
-                 // --- END BRCC DEBUG ---
-
-                 // Check if existing data is an array, overwrite if not (corrupted data handling)
-                 if (!is_array($daily_sales[$date][$product_key])) {
-                     error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Corrupted scalar data found for daily_sales entry. Overwriting.");
-                     // Overwrite with a new structure based on current item
-                     $daily_sales[$date][$product_key] = array(
-                         'name' => $product_name,
-                         'sku' => $sku,
-                         'product_id' => $product_id,
-                         'booking_date' => $booking_date,
-                         'quantity' => $quantity,
-                         'revenue' => $item->get_total(),
-                         'woocommerce' => $quantity,
-                         'eventbrite' => isset($daily_sales[$date][$product_key]['eventbrite']) ? $daily_sales[$date][$product_key]['eventbrite'] : 0,
-                         'square' => isset($daily_sales[$date][$product_key]['square']) ? $daily_sales[$date][$product_key]['square'] : 0,
-                         'timestamp' => current_time('timestamp'),
-                         'source' => 'woocommerce'
+            if (isset($daily_sales[$date][$daily_sales_product_key])) {
+                 BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d: Updating existing entry in daily_sales for key '%s'.", $order_id, $item_id, $daily_sales_product_key), ['existing_data' => $daily_sales[$date][$daily_sales_product_key]]);
+                 if (!is_array($daily_sales[$date][$daily_sales_product_key])) {
+                     BRCC_Helpers::log_operation('Sales Tracking', 'Data Corruption Warning', sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d: Corrupted scalar data found for daily_sales entry (key: %s). Overwriting.", $order_id, $item_id, $daily_sales_product_key), 'warning', ['order_id' => $order_id, 'item_id' => $item_id, 'key' => $daily_sales_product_key]);
+                     $daily_sales[$date][$daily_sales_product_key] = array(
+                         'name' => $product_name, 'sku' => $sku, 'product_id' => $product_id, 'booking_date' => $booking_date,
+                         'quantity' => $quantity, 'revenue' => $item->get_total(), 'woocommerce' => $quantity,
+                         'eventbrite' => 0, 'square' => 0, // Initialize other sources
+                         'timestamp' => current_time('timestamp'), 'source' => 'woocommerce'
                      );
                  } else {
-                     // Existing data is an array, proceed with updates
-                     $daily_sales[$date][$product_key]['quantity'] = isset($daily_sales[$date][$product_key]['quantity']) ? ($daily_sales[$date][$product_key]['quantity'] + $quantity) : $quantity;
-                     $daily_sales[$date][$product_key]['revenue'] = isset($daily_sales[$date][$product_key]['revenue']) ? ($daily_sales[$date][$product_key]['revenue'] + $item->get_total()) : $item->get_total();
-                     $daily_sales[$date][$product_key]['woocommerce'] = isset($daily_sales[$date][$product_key]['woocommerce']) ? ($daily_sales[$date][$product_key]['woocommerce'] + $quantity) : $quantity;
-                     $daily_sales[$date][$product_key]['timestamp'] = current_time('timestamp');
-                     $daily_sales[$date][$product_key]['source'] = 'woocommerce';
+                     $daily_sales[$date][$daily_sales_product_key]['quantity'] = ($daily_sales[$date][$daily_sales_product_key]['quantity'] ?? 0) + $quantity;
+                     $daily_sales[$date][$daily_sales_product_key]['revenue'] = ($daily_sales[$date][$daily_sales_product_key]['revenue'] ?? 0) + $item->get_total();
+                     $daily_sales[$date][$daily_sales_product_key]['woocommerce'] = ($daily_sales[$date][$daily_sales_product_key]['woocommerce'] ?? 0) + $quantity;
+                     $daily_sales[$date][$daily_sales_product_key]['timestamp'] = current_time('timestamp');
+                     // Ensure 'source' is updated or set if missing
+                     $daily_sales[$date][$daily_sales_product_key]['source'] = 'woocommerce';
                  }
-                 error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Existing entry updated/overwritten.");
             } else {
-                 error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Creating new entry in daily sales...");
-                $daily_sales[$date][$product_key] = array(
-                    'name' => $product_name,
-                    'sku' => $sku,
-                    'product_id' => $product_id,
-                    'booking_date' => $booking_date,
-                    'quantity' => $quantity,
-                    'revenue' => $item->get_total(),
-                    'woocommerce' => $quantity,
-                    'eventbrite' => 0,
-                    'square' => 0,
-                    'timestamp' => current_time('timestamp'),
-                    'source' => 'woocommerce'
+                BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d: Creating new entry in daily_sales for key '%s'.", $order_id, $item_id, $daily_sales_product_key));
+                $daily_sales[$date][$daily_sales_product_key] = array(
+                    'name' => $product_name, 'sku' => $sku, 'product_id' => $product_id, 'booking_date' => $booking_date,
+                    'quantity' => $quantity, 'revenue' => $item->get_total(), 'woocommerce' => $quantity,
+                    'eventbrite' => 0, 'square' => 0,
+                    'timestamp' => current_time('timestamp'), 'source' => 'woocommerce'
                 );
-                 error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Item ID: " . $item_id . " - New entry created.");
             }
-            error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - Item ID: " . $item_id . " - Processed. Product Key: " . $product_key);
+            BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Item #%d (Product #%s, Qty: %d, Booking Date: %s) processed for daily sales.", $order_id, $item_id, $product_id, $quantity, $booking_date_str));
         }
-        error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - After looping through items. Before update_option('brcc_daily_sales')...");
+        BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Finished item loop. Saving daily sales data.", $order_id));
 
-        // Save the updated daily sales data
         update_option('brcc_daily_sales', $daily_sales);
-        error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - After update_option('brcc_daily_sales'). Before update_daily_product_summary...");
+        BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Daily sales data saved. Updating daily product summary for date %s.", $order_id, $date));
 
-        // Also update product summary data for each day
         $this->update_daily_product_summary($date, $product_date_quantities);
-        error_log("BRCC DEBUG [Order Paid Hook]: Order ID: " . $order_id . " - After update_daily_product_summary. Before scheduling tasks...");
+        BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Daily product summary updated. Scheduling tasks (if any).", $order_id));
 
         // Schedule tasks for each item (if needed for other integrations)
         // Note: Eventbrite sync is now handled by stock reduction hooks, not scheduled here.
-        foreach ($product_date_quantities as $product_key => $data) {
+        // This loop currently doesn't do much other than prepare args, kept for structure.
+        foreach ($product_date_quantities as $summary_product_key => $data) {
             $schedule_args = array(
                 'order_id' => $order_id,
                 'product_id' => $data['product_id'],
                 'quantity' => $data['quantity'],
                 'booking_date' => $data['booking_date'],
-                'booking_time' => null // Time not readily available here
+                'booking_time' => null
             );
+            BRCC_Helpers::log_debug(sprintf("[BRCC Order #%d][Order Paid Hook] Prepared schedule_args for product_key '%s'.", $order_id, $summary_product_key), $schedule_args);
         }
-        error_log("BRCC DEBUG [Order Paid Hook]: Reached end of handle_order_paid for Order ID: " . $order_id);
+        BRCC_Helpers::log_operation('Sales Tracking', 'Order Paid End', sprintf("[BRCC Order #%d] Finished processing paid order.", $order_id), 'info');
     }
     
     /**
@@ -284,92 +225,72 @@ class BRCC_Sales_Tracker {
      * @return string|null Booking date in Y-m-d format or null if not found
      */
     private function get_booking_date_from_item($item) {
-        $item_id = $item->get_id(); // Get item ID for logging
-        error_log("BRCC DEBUG: Entering get_booking_date_from_item for Item ID: " . $item_id);
-        error_log("BRCC DEBUG: Item ID: " . $item_id . " - Checking FooEvents meta...");
-        // First check for FooEvents specific date meta
-        $fooevents_date = BRCC_Helpers::get_fooevents_date_from_item($item);
-        error_log("BRCC DEBUG: Item ID: " . $item_id . " - FooEvents check result: " . var_export($fooevents_date, true));
+        $item_id = $item->get_id();
+        $log_prefix = sprintf("[BRCC Item #%d][Date Extraction]", $item_id);
+
+        BRCC_Helpers::log_debug("$log_prefix Starting booking date extraction.");
+        BRCC_Helpers::log_debug("$log_prefix Checking FooEvents specific meta.");
+        
+        $fooevents_date = BRCC_Helpers::get_fooevents_date_from_item($item); // This helper likely has its own logging
+        BRCC_Helpers::log_debug("$log_prefix FooEvents check result: " . var_export($fooevents_date, true));
         if ($fooevents_date) {
-            error_log("BRCC DEBUG: Item ID: " . $item_id . " - Found FooEvents date: " . $fooevents_date . ". Returning.");
+            BRCC_Helpers::log_debug("$log_prefix Found FooEvents date: '$fooevents_date'. Returning.");
             return $fooevents_date;
         }
         
-        error_log("BRCC DEBUG: Item ID: " . $item_id . " - Checking standard item meta...");
-        // Check for booking/event date in item meta
+        BRCC_Helpers::log_debug("$log_prefix Checking standard item meta.");
         $item_meta = $item->get_meta_data();
         
-        // Common meta keys that might contain date information
         $date_meta_keys = array(
-            // Common FooEvents Keys
-            'fooevents_event_date',
-            'WooCommerceEventsDate',
-            // General Keys
-            'event_date',
-            'ticket_date',
-            'booking_date',
-            'pa_date',
-            'date',
-            '_event_date',
-            '_booking_date',
-            'Event Date',
-            'Ticket Date',
-            'Show Date',
-            'Performance Date'
+            'fooevents_event_date', 'WooCommerceEventsDate', // Common FooEvents Keys
+            'event_date', 'ticket_date', 'booking_date', 'pa_date', 'date', // General Keys
+            '_event_date', '_booking_date', 'Event Date', 'Ticket Date', 'Show Date', 'Performance Date'
         );
         
-        error_log("BRCC DEBUG: Item ID: " . $item_id . " - Looping through known meta keys...");
-        // First check the known meta keys
+        BRCC_Helpers::log_debug("$log_prefix Looping through known meta keys for date.", ['keys_to_check' => $date_meta_keys]);
         foreach ($date_meta_keys as $key) {
             $date_value = $item->get_meta($key);
             if (!empty($date_value)) {
-                error_log("BRCC DEBUG: Item ID: " . $item_id . " - Found potential date in known key '" . $key . "': " . $date_value);
+                BRCC_Helpers::log_debug("$log_prefix Found potential date in known key '$key': " . (is_array($date_value) ? wp_json_encode($date_value) : $date_value));
                 $parsed_date = BRCC_Helpers::parse_date_value($date_value);
                 if ($parsed_date) {
-                    error_log("BRCC DEBUG: Item ID: " . $item_id . " - Parsed date from known key '" . $key . "' as: " . $parsed_date . ". Returning.");
+                    BRCC_Helpers::log_debug("$log_prefix Parsed date from known key '$key' as: '$parsed_date'. Returning.");
                     return $parsed_date;
                 } else {
-                     error_log("BRCC DEBUG: Item ID: " . $item_id . " - Failed to parse date from known key '" . $key . "'.");
+                     BRCC_Helpers::log_debug("$log_prefix Failed to parse date from known key '$key'. Value: " . (is_array($date_value) ? wp_json_encode($date_value) : $date_value));
                 }
             }
         }
-        error_log("BRCC DEBUG: Item ID: " . $item_id . " - Finished known meta keys loop.");
+        BRCC_Helpers::log_debug("$log_prefix Finished known meta keys loop. No definitive date found yet.");
 
-        // --- BRCC DEBUG: Check $item_meta before looping ---
-        error_log("BRCC DEBUG: Item ID: " . $item_id . " - Type of \$item_meta: " . gettype($item_meta));
+        BRCC_Helpers::log_debug("$log_prefix Type of \$item_meta: " . gettype($item_meta) . ". Attempting to loop through ALL meta data if iterable.");
         if (is_array($item_meta) || is_object($item_meta)) {
-             error_log("BRCC DEBUG: Item ID: " . $item_id . " - Content of \$item_meta (before all meta loop): " . print_r($item_meta, true));
+             // To avoid overly verbose logs with full meta dumps, we'll log individual checks inside the loop.
         } else {
-             error_log("BRCC DEBUG: Item ID: " . $item_id . " - \$item_meta is not iterable!");
+             BRCC_Helpers::log_debug("$log_prefix \$item_meta is not iterable. Skipping full meta scan.");
         }
-        // --- END BRCC DEBUG ---
 
-        error_log("BRCC DEBUG: Item ID: " . $item_id . " - Attempting to loop through ALL meta data...");
-        // If not found in known keys, check all meta data
-        foreach ($item_meta as $meta) {
-            $meta_data = $meta->get_data();
-            $key = $meta_data['key'];
-            $value = $meta_data['value'];
-            error_log("BRCC DEBUG: Item ID: " . $item_id . " - Checking meta key: '" . $key . "' with value: " . (is_array($value) ? print_r($value, true) : $value));
-
-            // Check for various possible meta keys for event dates
-            if (preg_match('/(date|day|event|show|performance|time)/i', $key)) {
-                 error_log("BRCC DEBUG: Item ID: " . $item_id . " - Meta key '" . $key . "' matches date pattern. Trying to parse value...");
-                // Try to convert to Y-m-d format if it's a date
-                $date_value = BRCC_Helpers::parse_date_value($value);
-                if ($date_value) {
-                     error_log("BRCC DEBUG: Item ID: " . $item_id . " - Parsed date from meta key '" . $key . "' as: " . $date_value . ". Returning.");
-                    return $date_value;
-                } else {
-                     error_log("BRCC DEBUG: Item ID: " . $item_id . " - Failed to parse date from meta key '" . $key . "'.");
+        if (is_iterable($item_meta)) {
+            foreach ($item_meta as $meta) {
+                $meta_data = $meta->get_data();
+                $key = $meta_data['key'];
+                $value = $meta_data['value'];
+                // Log only if key matches a date-like pattern to reduce noise
+                if (preg_match('/(date|day|event|show|performance|time)/i', $key)) {
+                    BRCC_Helpers::log_debug("$log_prefix Checking all meta - Key: '$key', Value: " . (is_array($value) ? wp_json_encode($value) : $value));
+                    $date_value = BRCC_Helpers::parse_date_value($value);
+                    if ($date_value) {
+                        BRCC_Helpers::log_debug("$log_prefix Parsed date from all_meta key '$key' as: '$date_value'. Returning.");
+                        return $date_value;
+                    } else {
+                        BRCC_Helpers::log_debug("$log_prefix Failed to parse date from all_meta key '$key'.");
+                    }
                 }
             }
+            BRCC_Helpers::log_debug("$log_prefix Finished ALL meta data loop.");
         }
-        error_log("BRCC DEBUG: Item ID: " . $item_id . " - Finished ALL meta data loop.");
         
-        error_log("BRCC DEBUG: Item ID: " . $item_id . " - Checking product attributes as fallback...");
-        // Check product attributes as a fallback
-        // This is useful for variable products where the date is an attribute
+        BRCC_Helpers::log_debug("$log_prefix Checking product attributes as fallback.");
         $product_id = $item->get_product_id();
         $product = wc_get_product($product_id);
         
@@ -379,28 +300,29 @@ class BRCC_Sales_Tracker {
             
             if ($parent) {
                 $attributes = $product->get_attributes();
-                
-                error_log("BRCC DEBUG: Item ID: " . $item_id . " - Product is variation. Looping through attributes...");
+                BRCC_Helpers::log_debug("$log_prefix Product #$product_id is a variation. Looping through attributes.", ['attributes' => $attributes]);
                 foreach ($attributes as $attr_name => $attr_value) {
-                     error_log("BRCC DEBUG: Item ID: " . $item_id . " - Checking attribute: '" . $attr_name . "' with value: " . $attr_value);
+                     BRCC_Helpers::log_debug("$log_prefix Checking attribute: '$attr_name' with value: '$attr_value'.");
                     if (preg_match('/(date|day|event|show|performance)/i', $attr_name)) {
-                         error_log("BRCC DEBUG: Item ID: " . $item_id . " - Attribute '" . $attr_name . "' matches date pattern. Trying to parse value...");
+                         BRCC_Helpers::log_debug("$log_prefix Attribute '$attr_name' matches date pattern. Trying to parse value.");
                         $date_value = BRCC_Helpers::parse_date_value($attr_value);
                         if ($date_value) {
-                             error_log("BRCC DEBUG: Item ID: " . $item_id . " - Parsed date from attribute '" . $attr_name . "' as: " . $date_value . ". Returning.");
+                             BRCC_Helpers::log_debug("$log_prefix Parsed date from attribute '$attr_name' as: '$date_value'. Returning.");
                             return $date_value;
                         } else {
-                             error_log("BRCC DEBUG: Item ID: " . $item_id . " - Failed to parse date from attribute '" . $attr_name . "'.");
+                             BRCC_Helpers::log_debug("$log_prefix Failed to parse date from attribute '$attr_name'.");
                         }
                     }
                 }
-                 error_log("BRCC DEBUG: Item ID: " . $item_id . " - Finished attribute loop.");
+                 BRCC_Helpers::log_debug("$log_prefix Finished attribute loop for variation.");
             } else {
-                 error_log("BRCC DEBUG: Item ID: " . $item_id . " - Parent product not found or not a variation.");
+                 BRCC_Helpers::log_debug("$log_prefix Parent product #$parent_id not found for variation #$product_id.");
             }
+        } else {
+            BRCC_Helpers::log_debug("$log_prefix Product #$product_id is not a variation or product object not found. Skipping attribute check.");
         }
         
-        error_log("BRCC DEBUG: Item ID: " . $item_id . " - No date found in meta or attributes. Returning null.");
+        BRCC_Helpers::log_debug("$log_prefix No booking date found in meta or attributes. Returning null.");
         return null;
     }
 
@@ -412,35 +334,30 @@ class BRCC_Sales_Tracker {
      */
     public function is_sale_processed($order_key) {
         if (empty($order_key)) {
-            BRCC_Helpers::log_warning('is_sale_processed called with empty key.');
-            return false; // Cannot process an empty key, treat as not processed
+            BRCC_Helpers::log_operation('Sales Tracking', 'Process Check Warning', 'is_sale_processed called with empty key.', 'warning');
+            return false;
         }
         
-        // Limit the size of the processed sales array to prevent it growing indefinitely
-        $max_processed_sales = apply_filters('brcc_max_processed_sales', 1000); // Allow filtering, default 1000
+        $max_processed_sales = apply_filters('brcc_max_processed_sales', 1000);
         $processed_sales = get_option('brcc_processed_sales', array());
         
-        // Check if this order key exists
         if (isset($processed_sales[$order_key])) {
-            BRCC_Helpers::log_debug('is_sale_processed: Key "' . $order_key . '" found in processed list. Returning true.');
-            return true; // Already processed
+            BRCC_Helpers::log_debug(sprintf("[Sales Tracking][Process Check] Key '%s' found in processed list. Returning true.", $order_key));
+            return true;
         }
         
-        // Not found, mark as processed for future checks
-        BRCC_Helpers::log_debug('is_sale_processed: Key "' . $order_key . '" not found. Adding to processed list.');
-        $processed_sales[$order_key] = time(); // Store timestamp when processed
+        BRCC_Helpers::log_debug(sprintf("[Sales Tracking][Process Check] Key '%s' not found. Adding to processed list.", $order_key));
+        $processed_sales[$order_key] = time();
 
-        // Trim the array if it exceeds the maximum size
         if (count($processed_sales) > $max_processed_sales) {
-            // Sort by time (value) ascending to remove the oldest entries
             asort($processed_sales);
-            $processed_sales = array_slice($processed_sales, -$max_processed_sales, null, true); // Keep the latest N entries
-            BRCC_Helpers::log_info('is_sale_processed: Trimmed processed sales list to ' . $max_processed_sales . ' entries.');
+            $processed_sales = array_slice($processed_sales, -$max_processed_sales, null, true);
+            BRCC_Helpers::log_operation('Sales Tracking', 'Process List Maintenance', sprintf("Trimmed processed sales list to %d entries.", $max_processed_sales), 'info');
         }
 
         update_option('brcc_processed_sales', $processed_sales);
         
-        return false; // Was not processed before this check
+        return false;
     }
 
     /**
@@ -459,107 +376,98 @@ class BRCC_Sales_Tracker {
      * @return bool True if the sale was recorded successfully, false otherwise.
      */
     public function record_sale($product_id, $quantity, $source, $source_order_id, $customer_name, $customer_email, $gross_amount, $currency, $event_details = []) {
-        BRCC_Helpers::log_info('BRCC_Sales_Tracker::record_sale called', [
+        $log_context = [
             'product_id' => $product_id, 'quantity' => $quantity, 'source' => $source, 'source_order_id' => $source_order_id,
             'customer_name' => $customer_name, 'customer_email' => $customer_email, 'gross_amount' => $gross_amount, 'currency' => $currency,
             'event_details' => $event_details
-        ]);
+        ];
+        $log_message_prefix = sprintf("[BRCC Sale][Source: %s][Order #%s][Product #%d]", $source, $source_order_id, $product_id);
+        BRCC_Helpers::log_operation('Sales Tracking', 'Record Sale Start', "$log_message_prefix Starting to record sale.", 'info', $log_context);
 
         // --- Prevent Duplicate Processing ---
-        $order_key = $source . '_' . $source_order_id . '_' . $product_id; // Make key specific to product within order
+        $order_key = $source . '_' . $source_order_id . '_' . $product_id;
         if ($this->is_sale_processed($order_key)) {
-            BRCC_Helpers::log_warning('BRCC_Sales_Tracker::record_sale: Sale already processed, skipping.', ['order_key' => $order_key]);
-            return true; // Treat as success if already processed
+            $message = "$log_message_prefix Sale already processed (Order Key: $order_key). Skipping.";
+            BRCC_Helpers::log_operation('Sales Tracking', 'Record Sale Skipped (Duplicate)', $message, 'warning', ['order_key' => $order_key, 'original_context' => $log_context]);
+            return true;
         }
 
         // --- Get Product Info ---
         $product = wc_get_product($product_id);
         if (!$product) {
-            BRCC_Helpers::log_error('BRCC_Sales_Tracker::record_sale: Could not find product.', ['product_id' => $product_id]);
+            $message = "$log_message_prefix Could not find product. Aborting sale record.";
+            BRCC_Helpers::log_operation('Sales Tracking', 'Record Sale Failed (Product Not Found)', $message, 'error', ['product_id' => $product_id, 'original_context' => $log_context]);
             return false;
         }
         $product_name = $product->get_name();
         $sku = $product->get_sku();
+        BRCC_Helpers::log_debug("$log_message_prefix Product: '$product_name' (SKU: " . ($sku ?: 'N/A') . ").");
 
         // --- Determine Dates ---
-        $sale_date = current_time('Y-m-d'); // Date the sale is being recorded
-        $booking_date = $event_details['date'] ?? null; // Use event date as booking date if available
+        $sale_date = current_time('Y-m-d');
+        $booking_date = $event_details['date'] ?? null;
+        $booking_date_str = $booking_date ?: 'N/A';
+        BRCC_Helpers::log_debug("$log_message_prefix Sale Date: $sale_date, Booking Date: $booking_date_str.");
 
         // --- Update Daily Sales Option ---
         $daily_sales = get_option('brcc_daily_sales', []);
         if (!isset($daily_sales[$sale_date])) {
             $daily_sales[$sale_date] = [];
+            BRCC_Helpers::log_debug("$log_message_prefix Initialized daily_sales for $sale_date.");
         }
 
-        // Use product ID + booking date (if exists) as the key within the day
         $daily_key = $booking_date ? $product_id . '_' . $booking_date : (string)$product_id;
+        BRCC_Helpers::log_debug("$log_message_prefix Daily sales key: $daily_key.");
 
         if (!isset($daily_sales[$sale_date][$daily_key])) {
-            // Initialize entry if it doesn't exist
+            BRCC_Helpers::log_debug("$log_message_prefix Initializing new entry for daily_sales key $daily_key on $sale_date.");
             $daily_sales[$sale_date][$daily_key] = [
-                'name' => $product_name,
-                'sku' => $sku,
-                'product_id' => $product_id,
-                'booking_date' => $booking_date,
-                'quantity' => 0,
-                'woocommerce' => 0,
-                'eventbrite' => 0,
-                'square' => 0,
-                // Add other sources as needed
+                'name' => $product_name, 'sku' => $sku, 'product_id' => $product_id, 'booking_date' => $booking_date,
+                'quantity' => 0, 'woocommerce' => 0, 'eventbrite' => 0, 'square' => 0, // Initialize all known sources
             ];
         }
 
-        // Ensure the source key exists before incrementing
+        // Ensure specific source and quantity keys exist before incrementing
         if (!isset($daily_sales[$sale_date][$daily_key][$source])) {
              $daily_sales[$sale_date][$daily_key][$source] = 0;
         }
-         if (!isset($daily_sales[$sale_date][$daily_key]['quantity'])) {
+         if (!isset($daily_sales[$sale_date][$daily_key]['quantity'])) { // Overall quantity for the product on that day/booking_date
              $daily_sales[$sale_date][$daily_key]['quantity'] = 0;
          }
-
 
         // Update quantities
         $daily_sales[$sale_date][$daily_key]['quantity'] += $quantity;
         $daily_sales[$sale_date][$daily_key][$source] += $quantity;
+        // Update timestamp for this entry
+        $daily_sales[$sale_date][$daily_key]['timestamp'] = current_time('timestamp');
 
-        // Optionally store more details like amount, customer (consider privacy/data size)
-        // Example: Add order details if not already present or update
+
         if (!isset($daily_sales[$sale_date][$daily_key]['orders'])) {
             $daily_sales[$sale_date][$daily_key]['orders'] = [];
         }
         $daily_sales[$sale_date][$daily_key]['orders'][] = [
-             'source' => $source,
-             'order_id' => $source_order_id,
-             'quantity' => $quantity,
-             'amount' => $gross_amount,
-             'currency' => $currency,
+             'source' => $source, 'order_id' => $source_order_id, 'quantity' => $quantity,
+             'amount' => $gross_amount, 'currency' => $currency,
              'customer' => $customer_name . ' (' . $customer_email . ')',
              'timestamp' => current_time('mysql')
         ];
-
+        BRCC_Helpers::log_debug("$log_message_prefix Updated daily sales data in memory for key $daily_key.", ['current_data' => $daily_sales[$sale_date][$daily_key]]);
 
         update_option('brcc_daily_sales', $daily_sales);
-        BRCC_Helpers::log_debug('BRCC_Sales_Tracker::record_sale: Updated brcc_daily_sales option.', ['sale_date' => $sale_date, 'daily_key' => $daily_key]);
-
+        BRCC_Helpers::log_debug("$log_message_prefix Saved updated brcc_daily_sales option to database.", ['sale_date' => $sale_date, 'daily_key' => $daily_key]);
 
         // --- Update Product Summary Option ---
-        // Prepare data structure similar to handle_thankyou
         $product_summary_update = [
-            $daily_key => [ // Use the same key structure
-                'product_id' => $product_id,
-                'name' => $product_name,
-                'sku' => $sku,
-                'booking_date' => $booking_date,
-                'quantity' => $quantity // Pass the quantity for *this specific sale*
+            $daily_key => [
+                'product_id' => $product_id, 'name' => $product_name, 'sku' => $sku,
+                'booking_date' => $booking_date, 'quantity' => $quantity
             ]
         ];
         $this->update_daily_product_summary($sale_date, $product_summary_update);
-        BRCC_Helpers::log_debug('BRCC_Sales_Tracker::record_sale: Called update_daily_product_summary.', ['sale_date' => $sale_date]);
+        BRCC_Helpers::log_debug("$log_message_prefix Called update_daily_product_summary for $sale_date.", ['summary_update_payload' => $product_summary_update]);
 
-        // Note: Stock reduction should ideally happen elsewhere (e.g., via WooCommerce hooks or specific integration logic)
-        // This function focuses solely on *recording* the sale event.
-
-        BRCC_Helpers::log_info('BRCC_Sales_Tracker::record_sale: Sale recorded successfully.', ['order_key' => $order_key]);
+        $final_message = "$log_message_prefix Sale (Qty: $quantity) recorded successfully. Order Key: $order_key.";
+        BRCC_Helpers::log_operation('Sales Tracking', 'Record Sale Success', $final_message, 'success', ['order_key' => $order_key, 'final_context' => $log_context]);
         return true;
     }
 
@@ -973,24 +881,47 @@ class BRCC_Sales_Tracker {
             
             if (isset($product_summary[$date_string])) {
                 foreach ($product_summary[$date_string] as $product_id => $data) {
+                    // Defensive check for data format
+                    if (!is_array($data) ||
+                        !isset($data['name']) ||
+                        !isset($data['sku']) ||
+                        !isset($data['total_quantity'])) {
+                        
+                        if (class_exists('BRCC_Helpers')) { // Check if helpers class is available for logging
+                            BRCC_Helpers::log_error(
+                                "get_product_summary: Unexpected data format encountered.",
+                                [
+                                    'date' => $date_string,
+                                    'product_id' => $product_id,
+                                    'retrieved_data' => $data
+                                ]
+                            );
+                        } else {
+                            error_log("[BRCC Sales Tracker] get_product_summary: Unexpected data format for product_key {$product_id} on date {$date_string}. Expected array with name, sku, total_quantity.");
+                        }
+                        continue; // Skip this malformed entry
+                    }
+
                     if (!isset($result[$product_id])) {
                         $result[$product_id] = array(
-                            'name' => $data['name'],
-                            'sku' => $data['sku'],
+                            'name' => $data['name'], // Now safe to access
+                            'sku' => $data['sku'],   // Now safe to access
                             'total_quantity' => 0,
                             'dates' => array()
                         );
                     }
                     
-                    $result[$product_id]['total_quantity'] += $data['total_quantity'];
+                    // Ensure 'total_quantity' is numeric before adding
+                    $result[$product_id]['total_quantity'] += is_numeric($data['total_quantity']) ? (float)$data['total_quantity'] : 0;
                     
                     // Merge date-specific data
-                    if (!empty($data['dates'])) {
+                    if (isset($data['dates']) && is_array($data['dates']) && !empty($data['dates'])) {
                         foreach ($data['dates'] as $event_date => $qty) {
                             if (!isset($result[$product_id]['dates'][$event_date])) {
                                 $result[$product_id]['dates'][$event_date] = 0;
                             }
-                            $result[$product_id]['dates'][$event_date] += $qty;
+                            // Ensure $qty is numeric before adding
+                            $result[$product_id]['dates'][$event_date] += is_numeric($qty) ? (float)$qty : 0;
                         }
                     }
                 }

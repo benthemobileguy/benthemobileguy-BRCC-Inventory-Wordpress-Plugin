@@ -67,6 +67,15 @@ class BRCC_Admin_Settings {
             'brcc_api_settings',
             'brcc_api_settings_section'
         );
+        
+        // Eventbrite Webhook Secret Key
+        add_settings_field(
+            'eventbrite_webhook_secret',
+            __('Eventbrite Webhook Secret', 'brcc-inventory-tracker'),
+            array($this, 'eventbrite_webhook_secret_callback'),
+            'brcc_api_settings',
+            'brcc_api_settings_section'
+        );
 
         // Square Access Token
         add_settings_field(
@@ -190,6 +199,24 @@ class BRCC_Admin_Settings {
         <p class="description">
             <?php _e('Enter your Eventbrite Organization ID. You can usually find this in the URL of your organizer profile page (e.g., eventbrite.com/o/your-name-XXXXXXXXX).', 'brcc-inventory-tracker'); ?>
             <br/><em><?php _e('This is required for fetching events.', 'brcc-inventory-tracker'); ?></em>
+        </p>
+    <?php
+    }
+
+    /**
+     * Eventbrite Webhook Secret callback
+     *
+     * Renders the Eventbrite Webhook Secret field in the settings form.
+     * This key is used for validating incoming webhooks from Eventbrite.
+     */
+    public function eventbrite_webhook_secret_callback() {
+        $options = get_option('brcc_api_settings', array());
+        $value = isset($options['eventbrite_webhook_secret']) ? $options['eventbrite_webhook_secret'] : '';
+    ?>
+        <input type="password" id="eventbrite_webhook_secret" name="brcc_api_settings[eventbrite_webhook_secret]" value="<?php echo esc_attr($value); ?>" class="regular-text" />
+        <p class="description">
+            <?php _e('Enter your Eventbrite Webhook Secret. This is used to verify that incoming webhook requests are genuinely from Eventbrite.', 'brcc-inventory-tracker'); ?>
+            <br/><em><?php _e('You create this secret yourself and configure it in your Eventbrite webhook settings.', 'brcc-inventory-tracker'); ?></em>
         </p>
     <?php
     }

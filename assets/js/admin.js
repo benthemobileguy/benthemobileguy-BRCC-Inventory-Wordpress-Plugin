@@ -35,6 +35,7 @@
 
         // Inventory management
         initializeInventorySync();
+        initializeProductMappingSync(); // Add new function for product mapping sync
         initializeProductMappings();
         initializeProductMappingTest();
         initializeSquareMappingTest();
@@ -58,6 +59,7 @@
 
         // Initialize the Force Sync Tool components
         initializeForceSyncTool();
+        initializeFixMetadataTool(); // Initialize the new Fix Metadata tool
 
         // Point 4: Add Event Delegation for Dynamically Added Dropdowns
         // Re-initialize Select2 after AJAX calls that might add new dropdowns
@@ -99,31 +101,51 @@
             }
         });
 
-        // Point 6: Add global event handler for modals
-        // Add a global event handler to initialize select2 on modals when they open
+        // Manage Dates functionality is now handled in product-mapping-interface.php
+        // This event handler is removed to prevent conflicts
+        /*
         $(document).on('click', '.brcc-manage-dates', function() {
-            // The ajaxComplete handler above should now handle the initialization
-            // after the content is loaded, making this specific timeout potentially redundant.
-            // However, keeping a targeted re-check might be safer.
-            // Let's refine this to ensure it targets the correct elements after the AJAX call
-            // associated with '.brcc-manage-dates' finishes.
-            // Note: The ajaxComplete handler is generally preferred for dynamic content.
-            // This block can be removed if ajaxComplete proves reliable.
-            /*
-            setTimeout(function() {
-                // Find elements within the specific expanded row for this product ID
-                var productId = $(this).data('product-id'); // Get product ID from the clicked button
-                var $expandedRow = $('#brcc-dates-row-' + productId);
-
-                $expandedRow.find('.brcc-date-event').each(function() {
-                    populateEventDropdown($(this));
-                    initializeSelect2(this);
-                });
-                $expandedRow.find('[id^=brcc_manual_eventbrite_id_select_]').each(function() {
-                     initializeSelect2(this);
-                });
-            }, 350); // Adjusted timeout
-            */
+            // Code removed to prevent conflicts with the implementation in product-mapping-interface.php
+        });
+        */
+        
+        // Hide Dates functionality is now handled in product-mapping-interface.php
+        
+        // Handle manual Eventbrite Event ID entry for main product rows
+        $(document).on('change', '.brcc-manual-eventbrite-event-id', function() {
+            var manualId = $(this).val().trim();
+            if (manualId) {
+                // Get the row and product ID
+                var $row = $(this).closest('tr');
+                var productId = $row.data('product-id');
+                
+                // Update the hidden input with the manual ID
+                $(this).closest('td').find('.brcc-eventbrite-event-id').val(manualId);
+                
+                // Clear the dropdown selection to avoid conflicts
+                $(this).closest('td').find('.brcc-eventbrite-event-select, .brcc-eventbrite-event-id-select').val('').trigger('change.select2');
+                
+                console.log('Manual Eventbrite Event ID set:', manualId, 'for product ID:', productId);
+            }
+        });
+        
+        // Handle manual Eventbrite Event ID entry for date-specific rows
+        $(document).on('change', '.brcc-manual-date-eventbrite-event-id', function() {
+            var manualId = $(this).val().trim();
+            if (manualId) {
+                // Get the date-specific row
+                var $row = $(this).closest('tr.brcc-date-mapping-item');
+                var date = $row.data('date');
+                var time = $row.data('time');
+                
+                // Update the hidden input with the manual ID
+                $(this).closest('td').find('.brcc-date-eventbrite-event-id').val(manualId);
+                
+                // Clear the dropdown selection to avoid conflicts
+                $(this).closest('td').find('.brcc-date-eventbrite-event-select').val('').trigger('change.select2');
+                
+                console.log('Manual Date-specific Eventbrite Event ID set:', manualId, 'for date:', date, 'time:', time);
+            }
         });
 
     });
@@ -265,13 +287,25 @@
 
         // Attach the change event to load tickets for events (main mapping table)
         // Use event delegation for potentially dynamic elements
-        $(document).off('change.brccEventSelect').on('change.brccEventSelect', '.brcc-eventbrite-event-id-select', function() {
+        $(document).off('change.brccEventSelect').on('change.brccEventSelect', '.brcc-eventbrite-event-id-select, .brcc-eventbrite-event-select', function() {
+            // Update the manual entry field with the selected event ID
+            const selectedId = $(this).val();
+            if (selectedId) {
+                $(this).closest('td').find('.brcc-manual-eventbrite-event-id').val(selectedId);
+            }
+            
             loadEventbriteTickets($(this));
         });
 
         // Also handle date-specific events (for the modal/dynamic rows)
         // Use event delegation
-         $(document).off('change.brccDateEventSelect').on('change.brccDateEventSelect', '.brcc-date-event', function() { // Changed selector
+         $(document).off('change.brccDateEventSelect').on('change.brccDateEventSelect', '.brcc-date-event, .brcc-date-eventbrite-event-select', function() { // Changed selector
+            // Update the manual entry field with the selected event ID
+            const selectedId = $(this).val();
+            if (selectedId) {
+                $(this).closest('td').find('.brcc-manual-date-eventbrite-event-id').val(selectedId);
+            }
+            
             // Find the corresponding ticket dropdown within the same row/context
             const $row = $(this).closest('tr'); // Assuming it's in a table row
             // Pass the event select itself to loadEventbriteTickets
@@ -315,16 +349,64 @@
                 if ($select.data('select2')) $select.select2('destroy');
                 if ($select.data('selectWoo')) $select.selectWoo('destroy');
 
-                // Initialize with consistent settings for a better look
+                // Custom matcher function for searching by name or ID in brackets
+                const customMatcher = function(params, data) {
+                    // If there are no search terms, return all options
+                    if ($.trim(params.term) === '') {
+                        return data;
+                    }
+
+                    // Skip if option id or text is not available
+                    if (typeof data.text === 'undefined' || typeof data.id === 'undefined') {
+                        return null;
+                    }
+
+                    const term = params.term.toLowerCase();
+                    const text = data.text.toLowerCase();
+
+                    // Extract ID from brackets (e.g., "Event Name [12345]")
+                    const idMatch = data.text.match(/\[(\d+)\]$/);
+                    const id = idMatch ? idMatch[1] : null;
+
+                    // Check if term matches the start of the text OR the exact ID
+                    if (text.indexOf(term) > -1 || (id && id === params.term)) {
+                        return data;
+                    }
+
+                    // If it doesn't match, return null
+                    return null;
+                };
+
+                // Initialize with consistent settings and the custom matcher
                 $select[selectFuncName]({
                     width: '100%', // Use full width
-                    minimumResultsForSearch: 8, // Show search box after 8 items
+                    minimumResultsForSearch: 0, // Show search box always when there's a matcher
                     placeholder: $select.data('placeholder') || $select.find('option[value=""]').text() || 'Select an option...', // Use placeholder data or first option text
                     allowClear: true, // Add a clear button
                     dropdownAutoWidth: true, // Adjust dropdown width automatically
+                    // Allow manual entry of values not in the list (for event dropdowns)
+                    tags: $select.hasClass('brcc-eventbrite-event-select') || $select.hasClass('brcc-date-eventbrite-event-select'),
+                    createTag: function(params) {
+                        // Only apply to event dropdowns
+                        if (!($select.hasClass('brcc-eventbrite-event-select') || $select.hasClass('brcc-date-eventbrite-event-select'))) {
+                            return null;
+                        }
+                        
+                        // Check if the term is a number (likely an ID)
+                        const term = $.trim(params.term);
+                        if (/^\d+$/.test(term)) {
+                            return {
+                                id: term,
+                                text: 'Custom Event ID: ' + term,
+                                newTag: true
+                            };
+                        }
+                        return null; // Only allow numeric IDs
+                    },
                     // Attempt to attach dropdown to a more stable parent if possible
                     dropdownParent: $select.closest('.brcc-mapping-input-group, .brcc-dates-cell, .wp-list-table, form').length ?
-                        $select.closest('.brcc-mapping-input-group, .brcc-dates-cell, .wp-list-table, form') : $('body')
+                        $select.closest('.brcc-mapping-input-group, .brcc-dates-cell, .wp-list-table, form') : $('body'),
+                    matcher: customMatcher // Use the custom matcher
                 });
                  // console.log('Select2 initialized for:', selector); // Optional debug
             } catch (error) {
@@ -776,6 +858,56 @@
     }
 
     /**
+     * Initialize product mapping sync functionality
+     */
+    function initializeProductMappingSync() {
+        $('#brcc-sync-inventory').on('click', function(e) {
+            e.preventDefault();
+            const $button = $(this);
+            const $statusDiv = $('#brcc-sync-status');
+            
+            if ($button.prop('disabled')) return;
+            
+            if (!confirm(brcc_admin.sync_confirm || 'Are you sure you want to sync inventory? This will update inventory counts between WooCommerce and Eventbrite.')) {
+                return;
+            }
+            
+            $button.prop('disabled', true);
+            $statusDiv.show();
+            
+            $.ajax({
+                url: brcc_admin.ajax_url,
+                type: 'POST',
+                data: {
+                    action: 'brcc_sync_inventory_now',
+                    nonce: brcc_admin.nonce
+                },
+                success: function(response) {
+                    if (response.success) {
+                        $statusDiv.removeClass('notice-info notice-error').addClass('notice-success')
+                            .html('<p>' + (response.data.message || 'Inventory synchronized successfully!') + '</p>');
+                        
+                        // Optionally reload the page after a delay
+                        setTimeout(function() {
+                            location.reload();
+                        }, 2000);
+                    } else {
+                        $statusDiv.removeClass('notice-info notice-success').addClass('notice-error')
+                            .html('<p>' + (response.data && response.data.message ? response.data.message : 'Error syncing inventory.') + '</p>');
+                        $button.prop('disabled', false);
+                    }
+                },
+                error: function(xhr, status, error) {
+                    console.error('AJAX Error:', status, error);
+                    $statusDiv.removeClass('notice-info notice-success').addClass('notice-error')
+                        .html('<p>AJAX Error: Could not sync inventory.</p>');
+                    $button.prop('disabled', false);
+                }
+            });
+        });
+    }
+
+    /**
      * Initialize product mappings save functionality
      */
     function initializeProductMappings() {
@@ -808,7 +940,7 @@
         
         const mappings = {};
         
-        $('#brcc-product-mapping-table input[name^="brcc_product_mappings"], #brcc-product-mapping-table select[name^="brcc_product_mappings"]').each(function() {
+        $('#brcc-product-mapping-table .brcc-mapping-table tbody tr:not(.brcc-date-mappings-row) input[name^="brcc_product_mappings"], #brcc-product-mapping-table .brcc-mapping-table tbody tr:not(.brcc-date-mappings-row) select[name^="brcc_product_mappings"], #brcc-product-mapping-table .brcc-date-mappings-row .brcc-date-mappings-list input[name^="brcc_product_mappings"], #brcc-product-mapping-table .brcc-date-mappings-row .brcc-date-mappings-list select[name^="brcc_product_mappings"]').each(function() {
             const $input = $(this);
             const name = $input.attr('name');
             const matches = name.match(/brcc_product_mappings\[(\d+)\]\[([^\]]+)\]/);
@@ -825,15 +957,16 @@
             }
         });
         
-        $.ajax({
-            url: brcc_admin.ajax_url,
-            type: 'POST',
-            data: {
-                action: 'brcc_save_product_mappings',
-                nonce: brcc_admin.nonce,
-                mappings: mappings
-            },
-            success: function(response) {
+        if (Object.keys(mappings).length > 0) {
+            $.ajax({
+                url: brcc_admin.ajax_url,
+                type: 'POST',
+                data: {
+                    action: 'brcc_save_product_mappings',
+                    nonce: brcc_admin.nonce,
+                    mappings: mappings
+                },
+                success: function(response) {
                 if (response.success) {
                     $('#brcc-mapping-result').empty().append(
                         $('<div>').addClass('notice notice-success').append(
@@ -849,7 +982,7 @@
                 }
             },
             error: function(xhr, status, error) {
-                console.error('AJAX error:', status, error);
+                console.error('AJAX error:', status, error, xhr.responseText);
                 $('#brcc-mapping-result').empty().append(
                     $('<div>').addClass('notice notice-error').append(
                         $('<p>').text(brcc_admin.ajax_error || 'Error saving mappings')
@@ -868,8 +1001,24 @@
                 }, 5000);
             }
         });
+    } else {
+        console.warn('No mappings to save.');
+        $('#brcc-mapping-result').empty().append(
+            $('<div>').addClass('notice notice-warning').append(
+                $('<p>').text('No mappings to save.')
+            )
+        ).show();
+        setTimeout(function() {
+            $('#brcc-mapping-result').fadeOut();
+        }, 5000);
+        
+        // Re-enable the button
+        $button.prop('disabled', false).text(brcc_admin.save_mappings || 'Save Mappings');
+        setTimeout(function() {
+            $button.data('processing', false);
+        }, 1000);
     }
-
+    }
     /**
      * Initialize product mapping test functionality
      */
@@ -1003,7 +1152,7 @@
                     return;
                 }
                 
-                window.location.href = brcc_admin.admin_url + '?page=brcc-daily-sales&start_date=' + encodeURIComponent(startDate) + '&end_date=' + encodeURIComponent(endDate);
+                window.location.href = brcc_admin.admin_url + '?page=brcc-inventory&start_date=' + encodeURIComponent(startDate) + '&end_date=' + encodeURIComponent(endDate);
             });
         }
     
@@ -1318,7 +1467,7 @@
                            return;
                        }
                        
-                       let tableHtml = '<div class="brcc-attendee-count">' + 
+                       let tableHtml = '<div class="brcc-attendee-count">' +
                            'Showing ' + attendees.length + ' of ' + totalAttendees + ' total attendees</div>' +
                            '<table class="widefat brcc-attendee-table">' +
                            '<thead><tr>' +
@@ -1328,6 +1477,8 @@
                            '<th>Order/Ticket Ref</th>' +
                            '<th>Status</th>' +
                            '<th>Source</th>' +
+                           '<th>Time Slot</th>' +
+                           '<th>Ticket ID</th>' +
                            '</tr></thead><tbody>';
                        
                        $.each(attendees, function(i, attendee) {
@@ -1340,6 +1491,8 @@
                                '<td>' + escapeHtml(attendee.order_ref || 'N/A') + '</td>' +
                                '<td>' + escapeHtml(attendee.status || 'N/A') + '</td>' +
                                '<td>' + escapeHtml(attendee.source || 'Unknown') + '</td>' +
+                               '<td>' + escapeHtml(attendee.booking_slot || 'N/A') + '</td>' +
+                               '<td>' + escapeHtml(attendee.ticket_id || 'N/A') + '</td>' +
                                '</tr>';
                        });
                        
@@ -2116,17 +2269,98 @@ function updateDateSpecificEventDropdowns() {
                 },
                 error: function(xhr, status, error) {
                     console.error('Force Sync AJAX Error:', status, error);
-                     $resultDiv.removeClass('notice-warning'); // Remove processing style
+                    $resultDiv.removeClass('notice-warning'); // Remove processing style
                     $resultDiv.addClass('notice notice-error').html('<p>' + ajaxError + '</p>');
                 },
                 complete: function() {
                     $button.prop('disabled', false);
                     $spinner.removeClass('is-active').css('visibility', 'hidden');
-                     // Optionally hide the result message after a delay
-                     setTimeout(function() { $resultDiv.fadeOut(); }, 10000);
+                    // Optionally hide the result message after a delay
+                    setTimeout(function() { $resultDiv.fadeOut(); }, 10000);
                 }
             });
         });
     } // end initializeForceSyncTool
-   })(jQuery);
-   
+/**
+     * Initialize the Fix FooEvents Order Item Metadata tool
+     */
+    function initializeFixMetadataTool() {
+        $('#brcc-run-fix-meta-button').on('click', function() {
+            const $button = $(this);
+            const $spinner = $button.siblings('.spinner');
+            const $resultDiv = $('#brcc-fix-meta-result');
+            const days = $('#brcc_fix_meta_days').val();
+            const limit = $('#brcc_fix_meta_limit').val();
+            const nonce = $('#brcc_fix_fooevents_metadata_nonce_field').val();
+
+            // Basic validation
+            if (!days || parseInt(days) <= 0) {
+                alert('Please enter a valid number of days (must be greater than 0).');
+                return;
+            }
+            if (!limit || parseInt(limit) <= 0) {
+                alert('Please enter a valid limit for orders to process (must be greater than 0).');
+                return;
+            }
+
+            $spinner.addClass('is-active');
+            $button.prop('disabled', true);
+            $resultDiv.hide().empty().css('border-color', '#ccd0d4'); // Reset border color
+
+            $.ajax({
+                url: ajaxurl, // WordPress AJAX URL
+                type: 'POST',
+                data: {
+                    action: 'brcc_fix_fooevents_metadata_action',
+                    nonce: nonce,
+                    days: days,
+                    limit: limit
+                },
+                success: function(response) {
+                    $resultDiv.show();
+                    if (response.success) {
+                        let statsHtml = '<h4>Processing Complete:</h4><ul>';
+                        if (response.data && response.data.stats && typeof response.data.stats === 'object' && Object.keys(response.data.stats).length > 0) {
+                            for (const key in response.data.stats) {
+                                statsHtml += '<li><strong>' + key.replace(/_/g, ' ') + ':</strong> ' + response.data.stats[key] + '</li>';
+                            }
+                        } else if (response.data && typeof response.data.message === 'string' && !response.data.stats) { // If only a message is present in data
+                             statsHtml += '<li>' + response.data.message + '</li>';
+                        } else if (typeof response.data === 'string') { // Fallback if data is just a string (older success format)
+                             statsHtml += '<li>' + response.data + '</li>';
+                        }
+                         else {
+                             statsHtml += '<li>No detailed stats returned, but operation reported success.</li>';
+                        }
+                        statsHtml += '</ul>';
+
+                        if(response.data && response.data.log_messages && response.data.log_messages.length > 0){
+                            statsHtml += '<h5>Log Messages:</h5><pre style="white-space: pre-wrap; word-wrap: break-word; max-height: 200px; overflow-y: auto; background: #fff; padding: 5px;">';
+                            response.data.log_messages.forEach(function(msg){
+                                statsHtml += msg + '\n';
+                            });
+                            statsHtml += '</pre>';
+                        }
+                        $resultDiv.html(statsHtml).css('border-color', 'green');
+                    } else {
+                        let errorMessage = 'Unknown error occurred.';
+                        if (response.data && response.data.message) {
+                            errorMessage = response.data.message;
+                        } else if (response.data && typeof response.data === 'string') {
+                            errorMessage = response.data;
+                        }
+                        $resultDiv.html('<p style="color: red;"><strong>Error:</strong> ' + errorMessage + '</p>').css('border-color', 'red');
+                    }
+                },
+                error: function(jqXHR, textStatus, errorThrown) {
+                    $resultDiv.show().html('<p style="color: red;"><strong>AJAX Error:</strong> ' + textStatus + ' - ' + errorThrown + '</p>').css('border-color', 'red');
+                },
+                complete: function() {
+                    $spinner.removeClass('is-active');
+                    $button.prop('disabled', false);
+                }
+            });
+        });
+    }
+    
+})(jQuery); // end IIFE

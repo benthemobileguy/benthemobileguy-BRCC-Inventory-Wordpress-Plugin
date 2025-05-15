@@ -198,74 +198,154 @@ if (!defined('ABSPATH')) {
             </div>
         </div>
         
-        <!-- Sales Trend Chart -->
-        <div class="brcc-dashboard-card brcc-sales-trend-card">
+        <!-- Sales by Source -->
+        <div class="brcc-dashboard-card brcc-sales-source-card">
             <div class="brcc-card-header">
-                <h2><span class="dashicons dashicons-chart-line"></span> <?php _e('Sales Trend', 'brcc-inventory-tracker'); ?></h2>
+                <h2><span class="dashicons dashicons-networking"></span> <?php _e('Sales by Source', 'brcc-inventory-tracker'); ?></h2>
                 <div class="brcc-card-actions">
-                    <select id="brcc-trend-period" class="brcc-select">
-                        <option value="7"><?php _e('Last 7 Days', 'brcc-inventory-tracker'); ?></option>
-                        <option value="14"><?php _e('Last 14 Days', 'brcc-inventory-tracker'); ?></option>
-                        <option value="30" selected><?php _e('Last 30 Days', 'brcc-inventory-tracker'); ?></option>
-                    </select>
-                    <button class="brcc-card-refresh" data-card="sales-trend">
+                    <button class="brcc-card-refresh" data-card="sales-source">
                         <span class="dashicons dashicons-update"></span>
                     </button>
                 </div>
             </div>
             <div class="brcc-card-content">
-                <canvas id="brcc-sales-trend-chart" width="400" height="200"></canvas>
+                <?php
+                // Get sales by source
+                $woocommerce_sales = isset($period_summary['woocommerce_sales']) ? $period_summary['woocommerce_sales'] : 0;
+                $eventbrite_sales = isset($period_summary['eventbrite_sales']) ? $period_summary['eventbrite_sales'] : 0;
+                $square_sales = isset($period_summary['square_sales']) ? $period_summary['square_sales'] : 0;
+                $total_sales = $woocommerce_sales + $eventbrite_sales + $square_sales;
+                
+                // Calculate percentages
+                $woocommerce_percent = $total_sales > 0 ? round(($woocommerce_sales / $total_sales) * 100) : 0;
+                $eventbrite_percent = $total_sales > 0 ? round(($eventbrite_sales / $total_sales) * 100) : 0;
+                $square_percent = $total_sales > 0 ? round(($square_sales / $total_sales) * 100) : 0;
+                ?>
+                
+                <div class="brcc-sales-source-stats">
+                    <div class="brcc-source-stat brcc-woocommerce">
+                        <div class="brcc-source-icon">
+                            <span class="dashicons dashicons-wordpress"></span>
+                        </div>
+                        <div class="brcc-source-content">
+                            <h3><?php _e('WooCommerce', 'brcc-inventory-tracker'); ?></h3>
+                            <div class="brcc-source-value"><?php echo esc_html($woocommerce_sales); ?></div>
+                            <div class="brcc-source-bar">
+                                <div class="brcc-source-progress" style="width: <?php echo esc_attr($woocommerce_percent); ?>%"></div>
+                            </div>
+                            <div class="brcc-source-percent"><?php echo esc_html($woocommerce_percent); ?>%</div>
+                        </div>
+                    </div>
+                    
+                    <div class="brcc-source-stat brcc-eventbrite">
+                        <div class="brcc-source-icon">
+                            <span class="dashicons dashicons-tickets-alt"></span>
+                        </div>
+                        <div class="brcc-source-content">
+                            <h3><?php _e('Eventbrite', 'brcc-inventory-tracker'); ?></h3>
+                            <div class="brcc-source-value"><?php echo esc_html($eventbrite_sales); ?></div>
+                            <div class="brcc-source-bar">
+                                <div class="brcc-source-progress" style="width: <?php echo esc_attr($eventbrite_percent); ?>%"></div>
+                            </div>
+                            <div class="brcc-source-percent"><?php echo esc_html($eventbrite_percent); ?>%</div>
+                        </div>
+                    </div>
+                    
+                    <div class="brcc-source-stat brcc-square">
+                        <div class="brcc-source-icon">
+                            <span class="dashicons dashicons-store"></span>
+                        </div>
+                        <div class="brcc-source-content">
+                            <h3><?php _e('Square', 'brcc-inventory-tracker'); ?></h3>
+                            <div class="brcc-source-value"><?php echo esc_html($square_sales); ?></div>
+                            <div class="brcc-source-bar">
+                                <div class="brcc-source-progress" style="width: <?php echo esc_attr($square_percent); ?>%"></div>
+                            </div>
+                            <div class="brcc-source-percent"><?php echo esc_html($square_percent); ?>%</div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
         
-        <!-- Platform Comparison -->
-        <div class="brcc-dashboard-card brcc-platform-comparison-card">
+        <!-- Inventory Summary -->
+        <div class="brcc-dashboard-card brcc-inventory-summary-card">
             <div class="brcc-card-header">
-                <h2><span class="dashicons dashicons-networking"></span> <?php _e('Platform Comparison', 'brcc-inventory-tracker'); ?></h2>
+                <h2><span class="dashicons dashicons-clipboard"></span> <?php _e('Inventory Summary', 'brcc-inventory-tracker'); ?></h2>
                 <div class="brcc-card-actions">
-                    <button class="brcc-card-refresh" data-card="platform-comparison">
+                    <button class="brcc-card-refresh" data-card="inventory-summary">
                         <span class="dashicons dashicons-update"></span>
                     </button>
                 </div>
             </div>
             <div class="brcc-card-content">
-                <canvas id="brcc-platform-chart" width="400" height="200"></canvas>
-                <div class="brcc-platform-stats">
-                    <div class="brcc-platform-stat">
-                        <span class="brcc-platform-label">WooCommerce:</span>
-                        <span class="brcc-platform-value"><?php echo isset($period_summary['woocommerce_sales']) ? esc_html($period_summary['woocommerce_sales']) : '0'; ?> sales</span>
+                <?php
+                // Get inventory summary counts
+                $in_stock_count = 0;
+                $low_stock_count = 0;
+                $out_of_stock_count = 0;
+                
+                $args = array(
+                    'post_type' => 'product',
+                    'posts_per_page' => -1,
+                    'post_status' => 'publish',
+                );
+                
+                $products_query = new WP_Query($args);
+                
+                if ($products_query->have_posts()) {
+                    while ($products_query->have_posts()) {
+                        $products_query->the_post();
+                        $product = wc_get_product(get_the_ID());
+                        
+                        if ($product && $product->managing_stock()) {
+                            $stock = $product->get_stock_quantity();
+                            $stock_status = $product->get_stock_status();
+                            
+                            if ($stock_status === 'outofstock') {
+                                $out_of_stock_count++;
+                            } elseif ($stock !== null && $stock <= 5) {
+                                $low_stock_count++;
+                            } else {
+                                $in_stock_count++;
+                            }
+                        }
+                    }
+                    wp_reset_postdata();
+                }
+                ?>
+                
+                <div class="brcc-inventory-summary-stats">
+                    <div class="brcc-inventory-stat brcc-in-stock">
+                        <div class="brcc-stat-icon">
+                            <span class="dashicons dashicons-yes-alt"></span>
+                        </div>
+                        <div class="brcc-stat-content">
+                            <h3><?php _e('In Stock', 'brcc-inventory-tracker'); ?></h3>
+                            <div class="brcc-stat-value"><?php echo esc_html($in_stock_count); ?></div>
+                        </div>
                     </div>
-                    <div class="brcc-platform-stat">
-                        <span class="brcc-platform-label">Eventbrite:</span>
-                        <span class="brcc-platform-value"><?php echo isset($period_summary['eventbrite_sales']) ? esc_html($period_summary['eventbrite_sales']) : '0'; ?> sales</span>
+                    
+                    <div class="brcc-inventory-stat brcc-low-stock">
+                        <div class="brcc-stat-icon">
+                            <span class="dashicons dashicons-warning"></span>
+                        </div>
+                        <div class="brcc-stat-content">
+                            <h3><?php _e('Low Stock', 'brcc-inventory-tracker'); ?></h3>
+                            <div class="brcc-stat-value"><?php echo esc_html($low_stock_count); ?></div>
+                        </div>
                     </div>
-                    <div class="brcc-platform-stat">
-                        <span class="brcc-platform-label">Square:</span>
-                        <span class="brcc-platform-value"><?php echo isset($period_summary['square_sales']) ? esc_html($period_summary['square_sales']) : '0'; ?> sales</span>
+                    
+                    <div class="brcc-inventory-stat brcc-out-of-stock">
+                        <div class="brcc-stat-icon">
+                            <span class="dashicons dashicons-dismiss"></span>
+                        </div>
+                        <div class="brcc-stat-content">
+                            <h3><?php _e('Out of Stock', 'brcc-inventory-tracker'); ?></h3>
+                            <div class="brcc-stat-value"><?php echo esc_html($out_of_stock_count); ?></div>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </div>
-        
-        <!-- Top Products -->
-        <div class="brcc-dashboard-card brcc-top-products-card">
-            <div class="brcc-card-header">
-                <h2><span class="dashicons dashicons-awards"></span> <?php _e('Top Products', 'brcc-inventory-tracker'); ?></h2>
-                <div class="brcc-card-actions">
-                    <button class="brcc-card-refresh" data-card="top-products">
-                        <span class="dashicons dashicons-update"></span>
-                    </button>
-                </div>
-            </div>
-            <div class="brcc-card-content">
-                <?php if (isset($period_summary['unique_products']) && !empty($period_summary['unique_products'])): ?>
-                    <canvas id="brcc-products-chart" width="400" height="200"></canvas>
-                <?php else: ?>
-                    <div class="brcc-empty-state">
-                        <span class="dashicons dashicons-format-status"></span>
-                        <p><?php _e('No product data available for the selected period.', 'brcc-inventory-tracker'); ?></p>
-                    </div>
-                <?php endif; ?>
             </div>
         </div>
         
@@ -419,9 +499,6 @@ if (!defined('ABSPATH')) {
             <div class="brcc-card-header">
                 <h2><span class="dashicons dashicons-list-view"></span> <?php _e('Recent Sales', 'brcc-inventory-tracker'); ?></h2>
                 <div class="brcc-card-actions">
-                    <a href="<?php echo admin_url('admin.php?page=brcc-daily-sales'); ?>" class="button button-small">
-                        <?php _e('View All', 'brcc-inventory-tracker'); ?>
-                    </a>
                     <button class="brcc-card-refresh" data-card="recent-sales">
                         <span class="dashicons dashicons-update"></span>
                     </button>
@@ -642,239 +719,7 @@ jQuery(document).ready(function($) {
     });
     
     <?php if (!empty($daily_sales)): ?>
-    // Common chart colors
-    var backgroundColors = [
-        'rgba(54, 162, 235, 0.6)',
-        'rgba(255, 99, 132, 0.6)',
-        'rgba(255, 206, 86, 0.6)',
-        'rgba(75, 192, 192, 0.6)',
-        'rgba(153, 102, 255, 0.6)',
-        'rgba(255, 159, 64, 0.6)',
-        'rgba(199, 199, 199, 0.6)'
-    ];
-    
-    // Group sales by product
-    var productSales = {};
-    
-    <?php foreach ($daily_sales as $sale): ?>
-        <?php 
-        $product_name = '';
-        if (!empty($sale['product_id'])) {
-            $product = wc_get_product($sale['product_id']);
-            $product_name = $product ? $product->get_name() : $sale['product_id'];
-        } else {
-            $product_name = $sale['product_name'] ?? __('Unknown', 'brcc-inventory-tracker');
-        }
-        ?>
-        
-        var productName = <?php echo json_encode($product_name); ?>;
-        var quantity = <?php echo (int)$sale['quantity']; ?>;
-        
-        if (productSales[productName]) {
-            productSales[productName] += quantity;
-        } else {
-            productSales[productName] = quantity;
-        }
-    <?php endforeach; ?>
-    
-    // Top Products Chart
-    var productsCtx = document.getElementById('brcc-products-chart').getContext('2d');
-    
-    // Convert to arrays for chart and sort by sales (descending)
-    var productEntries = Object.entries(productSales);
-    productEntries.sort(function(a, b) {
-        return b[1] - a[1]; // Sort by sales count (descending)
-    });
-    
-    // Take only top 5 products
-    var topProducts = productEntries.slice(0, 5);
-    
-    // Extract labels and data
-    var productLabels = [];
-    var salesData = [];
-    topProducts.forEach(function(entry) {
-        productLabels.push(entry[0]);
-        salesData.push(entry[1]);
-    });
-    
-    // Create chart
-    var productsChart = new Chart(productsCtx, {
-        type: 'bar',
-        data: {
-            labels: productLabels,
-            datasets: [{
-                label: '<?php _e('Sales', 'brcc-inventory-tracker'); ?>',
-                data: salesData,
-                backgroundColor: backgroundColors.slice(0, productLabels.length),
-                borderColor: backgroundColors.map(color => color.replace('0.6', '1')),
-                borderWidth: 1
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: false
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            return context.parsed.y + ' sales';
-                        }
-                    }
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    ticks: {
-                        precision: 0
-                    }
-                }
-            }
-        }
-    });
-    
-    // Platform Comparison Chart
-    var platformCtx = document.getElementById('brcc-platform-chart').getContext('2d');
-    
-    var platformData = [
-        <?php echo isset($period_summary['woocommerce_sales']) ? $period_summary['woocommerce_sales'] : 0; ?>,
-        <?php echo isset($period_summary['eventbrite_sales']) ? $period_summary['eventbrite_sales'] : 0; ?>,
-        <?php echo isset($period_summary['square_sales']) ? $period_summary['square_sales'] : 0; ?>
-    ];
-    
-    var platformChart = new Chart(platformCtx, {
-        type: 'doughnut',
-        data: {
-            labels: ['WooCommerce', 'Eventbrite', 'Square'],
-            datasets: [{
-                data: platformData,
-                backgroundColor: [
-                    'rgba(113, 88, 226, 0.8)',
-                    'rgba(246, 87, 64, 0.8)',
-                    'rgba(0, 106, 255, 0.8)'
-                ],
-                borderColor: [
-                    'rgba(113, 88, 226, 1)',
-                    'rgba(246, 87, 64, 1)',
-                    'rgba(0, 106, 255, 1)'
-                ],
-                borderWidth: 1
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    position: 'bottom'
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            var label = context.label || '';
-                            var value = context.parsed || 0;
-                            var total = context.dataset.data.reduce((a, b) => a + b, 0);
-                            var percentage = total > 0 ? Math.round((value / total) * 100) : 0;
-                            return label + ': ' + value + ' sales (' + percentage + '%)';
-                        }
-                    }
-                }
-            },
-            cutout: '60%'
-        }
-    });
-    
-    // Sales Trend Chart
-    var trendCtx = document.getElementById('brcc-sales-trend-chart').getContext('2d');
-    
-    <?php
-    // Use real sales data for the trend chart
-    $daily_trend_data = isset($period_summary['daily_trend']) ? $period_summary['daily_trend'] : array();
-    
-    // If we have real trend data, use it
-    if (!empty($daily_trend_data)) {
-        echo "// Using real sales trend data\n";
-        echo "var trendLabels = " . json_encode(array_keys($daily_trend_data)) . ";\n";
-        echo "var trendData = " . json_encode(array_values($daily_trend_data)) . ";\n";
-    } else {
-        // Fallback to generating dates for the last 30 days if no real data
-        echo "// No real trend data available, using fallback\n";
-        echo "var trendLabels = [];\n";
-        echo "var trendData = [];\n";
-        echo "var today = new Date();\n";
-        echo "for (var i = 29; i >= 0; i--) {\n";
-        echo "    var date = new Date();\n";
-        echo "    date.setDate(today.getDate() - i);\n";
-        echo "    trendLabels.push(date.toLocaleDateString());\n";
-        echo "    trendData.push(0); // Zero sales as fallback\n";
-        echo "}\n";
-    }
-    ?>
-    
-    var trendChart = new Chart(trendCtx, {
-        type: 'line',
-        data: {
-            labels: trendLabels,
-            datasets: [{
-                label: '<?php _e('Daily Sales', 'brcc-inventory-tracker'); ?>',
-                data: trendData,
-                backgroundColor: 'rgba(54, 162, 235, 0.2)',
-                borderColor: 'rgba(54, 162, 235, 1)',
-                borderWidth: 2,
-                tension: 0.4,
-                fill: true,
-                pointRadius: 0,
-                pointHoverRadius: 4
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    display: false
-                },
-                tooltip: {
-                    mode: 'index',
-                    intersect: false
-                }
-            },
-            scales: {
-                x: {
-                    grid: {
-                        display: false
-                    },
-                    ticks: {
-                        maxTicksLimit: 7,
-                        callback: function(value, index, values) {
-                            // Only show every 5th label to avoid crowding
-                            return index % 5 === 0 ? this.getLabelForValue(value) : '';
-                        }
-                    }
-                },
-                y: {
-                    beginAtZero: true,
-                    ticks: {
-                        precision: 0
-                    }
-                }
-            }
-        }
-    });
-    
-    // Update trend chart when period changes
-    $('#brcc-trend-period').on('change', function() {
-        var days = parseInt($(this).val());
-        var newLabels = trendLabels.slice(-days);
-        var newData = trendData.slice(-days);
-        
-        trendChart.data.labels = newLabels;
-        trendChart.data.datasets[0].data = newData;
-        trendChart.update();
-    });
+    // Simple initialization for any remaining functionality
     <?php endif; ?>
 });
 </script>

@@ -57,7 +57,32 @@ class BRCC_Product_Mappings
         $all_mappings = $this->all_mappings;
         
         // For debugging
-        error_log("DEBUG: Getting mappings for product: {$product_id}, date: {$date}, time: {$time}");
+        BRCC_Helpers::log_debug("[Product Mappings] Getting mappings for product: {$product_id}, date: {$date}, time: {$time}");
+
+        // First check if this is a FooEvents product
+        if (BRCC_Helpers::is_fooevents_active() && $date) {
+            $product = wc_get_product($product_id);
+            if ($product && BRCC_Helpers::is_fooevents_product($product)) {
+                // Get FooEvents dates for this product
+                $fooevents_dates = $this->get_fooevents_dates($product);
+                foreach ($fooevents_dates as $event_date) {
+                    if ($event_date['date'] === $date) {
+                        // If we have a time, check it matches within buffer
+                        if ($time && isset($event_date['time'])) {
+                            if (!BRCC_Helpers::is_time_close($time, $event_date['time'])) {
+                                continue;
+                            }
+                        }
+                        // Found matching FooEvents date, look for corresponding mapping
+                        $date_key = $event_date['time'] ? $date . '_' . $event_date['time'] : $date;
+                        if (isset($all_mappings[$product_id . '_dates'][$date_key])) {
+                            BRCC_Helpers::log_debug("[Product Mappings] Found FooEvents date mapping for {$date_key}");
+                            return $all_mappings[$product_id . '_dates'][$date_key];
+                        }
+                    }
+                }
+            }
+        }
         
         // Check for date+time specific mapping first (exact match)
         $date_time_key = $date && $time ? $date . '_' . $time : null;

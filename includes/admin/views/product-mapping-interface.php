@@ -89,6 +89,12 @@ if (!defined('ABSPATH')) {
                                     <?php _e('Loading events...', 'brcc-inventory-tracker'); ?>
                                 </div>
                                 <input type="hidden" class="brcc-eventbrite-event-id" value="<?php echo esc_attr($eventbrite_event_id); ?>" />
+                                
+                                <!-- Manual entry field for Eventbrite Event ID -->
+                                <div style="margin-top: 5px;">
+                                    <input type="text" class="brcc-manual-eventbrite-event-id" placeholder="<?php _e('Or enter Event ID manually...', 'brcc-inventory-tracker'); ?>" value="<?php echo esc_attr($eventbrite_event_id); ?>" />
+                                    <small style="display: block; color: #666;"><?php _e('Manual Event ID entry', 'brcc-inventory-tracker'); ?></small>
+                                </div>
                             </td>
                             <td>
                                 <input type="text" class="brcc-eventbrite-id" placeholder="<?php _e('Enter Ticket Class ID...', 'brcc-inventory-tracker'); ?>" value="<?php echo esc_attr($eventbrite_id); ?>" />
@@ -136,6 +142,13 @@ if (!defined('ABSPATH')) {
                                                                     <option value=""><?php _e('Select an event...', 'brcc-inventory-tracker'); ?></option>
                                                                 </select>
                                                                 <input type="hidden" class="brcc-date-eventbrite-event-id" value="<?php echo esc_attr($date_mapping['eventbrite_event_id']); ?>" />
+                                                                
+                                                                <!-- Manual entry field for date-specific Eventbrite Event ID -->
+                                                                <div style="margin-top: 5px; margin-bottom: 5px;">
+                                                                    <input type="text" class="brcc-manual-date-eventbrite-event-id" placeholder="<?php _e('Or enter Event ID manually...', 'brcc-inventory-tracker'); ?>" value="<?php echo esc_attr($date_mapping['eventbrite_event_id']); ?>" />
+                                                                    <small style="display: block; color: #666;"><?php _e('Manual Event ID entry', 'brcc-inventory-tracker'); ?></small>
+                                                                </div>
+                                                                
                                                                 <input type="text" class="brcc-date-eventbrite-id" placeholder="<?php _e('Enter Ticket Class ID...', 'brcc-inventory-tracker'); ?>" value="<?php echo esc_attr($date_mapping['eventbrite_id']); ?>" />
                                                             </td>
                                                             <td>
@@ -170,7 +183,24 @@ if (!defined('ABSPATH')) {
         
         <div class="brcc-mapping-actions">
             <button type="button" id="brcc-save-mappings" class="button button-primary"><?php _e('Save Mappings', 'brcc-inventory-tracker'); ?></button>
+            <button type="button" id="brcc-sync-inventory" class="button button-secondary" style="margin-left: 10px;">
+                <span class="dashicons dashicons-update" style="margin-top: 3px;"></span>
+                <?php _e('Sync Inventory Now', 'brcc-inventory-tracker'); ?>
+            </button>
             <span id="brcc-save-status"></span>
+            <div id="brcc-sync-status" style="display: none; margin-top: 10px;" class="notice notice-info">
+                <p><?php _e('Syncing inventory...', 'brcc-inventory-tracker'); ?> <span class="spinner is-active" style="float: none; margin: 0;"></span></p>
+            </div>
+        </div>
+        
+        <div class="notice notice-info" style="margin-top: 20px;">
+            <p><strong><?php _e('Inventory Sync Instructions:', 'brcc-inventory-tracker'); ?></strong></p>
+            <ol>
+                <li><?php _e('First, make sure all your products are properly mapped to Eventbrite tickets.', 'brcc-inventory-tracker'); ?></li>
+                <li><?php _e('Click "Save Mappings" to save your product mappings.', 'brcc-inventory-tracker'); ?></li>
+                <li><?php _e('Click "Sync Inventory Now" to synchronize inventory between WooCommerce and Eventbrite.', 'brcc-inventory-tracker'); ?></li>
+                <li><?php _e('After the initial sync, inventory will be automatically decremented on both platforms when a sale occurs.', 'brcc-inventory-tracker'); ?></li>
+            </ol>
         </div>
 
         <!-- Template for new date mapping row -->
@@ -185,6 +215,13 @@ if (!defined('ABSPATH')) {
                         <option value=""><?php _e('Select an event...', 'brcc-inventory-tracker'); ?></option>
                     </select>
                     <input type="hidden" class="brcc-date-eventbrite-event-id" value="" />
+                    
+                    <!-- Manual entry field for date-specific Eventbrite Event ID -->
+                    <div style="margin-top: 5px; margin-bottom: 5px;">
+                        <input type="text" class="brcc-manual-date-eventbrite-event-id" placeholder="<?php _e('Or enter Event ID manually...', 'brcc-inventory-tracker'); ?>" value="" />
+                        <small style="display: block; color: #666;"><?php _e('Manual Event ID entry', 'brcc-inventory-tracker'); ?></small>
+                    </div>
+                    
                     <input type="text" class="brcc-date-eventbrite-id" placeholder="<?php _e('Enter Ticket Class ID...', 'brcc-inventory-tracker'); ?>" value="" />
                 </td>
                 <td>
@@ -226,23 +263,83 @@ jQuery(document).ready(function($) {
     // Load Eventbrite events for all dropdowns
     loadEventbriteEvents();
     
-    // Toggle date mappings
-    $('.brcc-manage-dates, .brcc-hide-dates').on('click', function(e) {
+    // Toggle date mappings - Handle "Manage Dates" click
+    $('.brcc-manage-dates').on('click', function(e) {
         e.preventDefault();
-        var $link = $(this);
-        var action = $link.data('action');
-        var $row = $link.closest('tr');
-        var $dateRow = $row.next('.brcc-date-mappings-row');
+        e.stopPropagation(); // Prevent event bubbling
+        console.log('Manage Dates clicked');
         
-        if (action === 'manage') {
-            $dateRow.show();
-            $link.closest('.row-actions').find('.manage-dates').hide();
-            $link.closest('.row-actions').find('.hide-dates').show();
-        } else {
-            $dateRow.hide();
-            $link.closest('.row-actions').find('.hide-dates').hide();
-            $link.closest('.row-actions').find('.manage-dates').show();
-        }
+        // Store current scroll position
+        var scrollPos = $(window).scrollTop();
+        
+        var $link = $(this);
+        var $row = $link.closest('tr');
+        var productId = $row.data('product-id');
+        console.log('Product ID:', productId);
+        
+        // Find the date mappings row using the product ID
+        var $dateRow = $('.brcc-date-mappings-row[data-product-id="' + productId + '"]');
+        console.log('Date row found:', $dateRow.length);
+        
+        // Show the date mappings using multiple methods
+        $dateRow.css('display', 'table-row');
+        $dateRow.show();
+        $dateRow.removeClass('hidden');
+        
+        // Toggle the visibility of the action links
+        $link.closest('.row-actions').find('.manage-dates').hide();
+        $link.closest('.row-actions').find('.hide-dates').show();
+        
+        // Clear any error messages that might be displayed
+        $('.notice-error').hide();
+        
+        // Restore scroll position
+        setTimeout(function() {
+            $(window).scrollTop(scrollPos);
+        }, 10);
+        
+        console.log('Manage Dates processing complete');
+        return false; // Prevent any default behavior or event bubbling
+    });
+    
+    // Handle "Hide Dates" click
+    $('.brcc-hide-dates').on('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation(); // Prevent event bubbling
+        
+        console.log('Hide Dates clicked');
+        
+        // Store current scroll position
+        var scrollPos = $(window).scrollTop();
+        
+        // Get the product ID from the data attribute
+        var $row = $(this).closest('tr');
+        var productId = $row.data('product-id');
+        console.log('Product ID:', productId);
+        
+        // Find the date mappings row using the product ID
+        var $dateRow = $('.brcc-date-mappings-row[data-product-id="' + productId + '"]');
+        console.log('Date row found:', $dateRow.length);
+        
+        // Force hide the date mappings row using multiple methods
+        $dateRow.css('display', 'none');
+        $dateRow.hide();
+        $dateRow.addClass('hidden');
+        
+        // Toggle the visibility of the action links
+        $(this).closest('.row-actions').find('.hide-dates').hide();
+        $(this).closest('.row-actions').find('.manage-dates').show();
+        
+        // Clear any error messages that might be displayed
+        $('.notice-error').hide();
+        
+        // Restore scroll position
+        setTimeout(function() {
+            $(window).scrollTop(scrollPos);
+        }, 10);
+        
+        console.log('Hide Dates processing complete');
+        return false;
     });
 
     // Add new date mapping
